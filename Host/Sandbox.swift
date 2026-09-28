@@ -82,7 +82,9 @@ public struct Sandbox {
                                         anthropicAuthenticated: anthropicAuthenticated,
                                         hostDir: options.hostDir,
                                         hostEnv: ProcessInfo.processInfo.environment)
-        let command = [Self.seedCommand] + (options.command ?? Self.interactiveShell)
+        // A shell comes up before the skills and plugins are copied; a command waits for them.
+        let command = options.command.map { [Self.seedCommand] + $0 }
+            ?? [Self.seedCommand, "--lazy"] + Self.interactiveShell
         return try session.run(controlFd: controlFd,
                                command: command,
                                workDir: "/workspace", env: env,
@@ -262,8 +264,8 @@ private final class Services: @unchecked Sendable {
                 return err("malformed drop request")
             }
             // /workspace is already mounted, and is the one host dir the guest can rewrite.
-            let forbidden = [URL(fileURLWithPath: hostDir).resolvingSymlinksInPath().path]
-            return DropIn.service(rawPath: raw, forbidden: forbidden, approval: approval, to: fd)
+            let mounted = URL(fileURLWithPath: hostDir).resolvingSymlinksInPath().path
+            return DropIn.service(rawPath: raw, mounted: mounted, approval: approval, to: fd)
         case .net:
             switch String(bytes: payload, encoding: .utf8) {
             case "on": return setNetwork(true)

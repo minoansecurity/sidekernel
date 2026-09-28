@@ -5,10 +5,11 @@ import Darwin
 public enum DropIn {
     static let chunkSize = 1 << 20
 
-    public static func service(rawPath: String, forbidden: [String],
+    /// `mounted` is the host dir already at /workspace; a path inside it is pointed there instead.
+    public static func service(rawPath: String, mounted: String,
                                approval: HostApproval, to connection: Int32) -> Frame {
         let fd: Int32, path: String, size: Int, isDir: Bool
-        switch openPinned(rawPath, forbidden: forbidden) {
+        switch openPinned(rawPath, mounted: mounted) {
         case .refused(let why):
             return .ctlReply(status: .err, message: why, payload: [])
         case .pinned(let f, let p, let s, let d):
@@ -37,7 +38,7 @@ public enum DropIn {
     }
 
     /// Holds the inode open, so nothing can be swapped in after approval.
-    private static func openPinned(_ raw: String, forbidden: [String]) -> Candidate {
+    private static func openPinned(_ raw: String, mounted: String) -> Candidate {
         let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard path.hasPrefix("/") else { return .refused("path must be absolute") }
         let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
@@ -47,9 +48,11 @@ public enum DropIn {
         // Name the inode from the open fd, never the guest's string, so the human sees the truth.
         let canonical = URL(fileURLWithPath: pathOfPinnedFd(fd) ?? path)
             .resolvingSymlinksInPath().path
-        if forbidden.contains(where: { canonical == $0 || canonical.hasPrefix($0 + "/") }) {
+        // With ~ mounted, ~/.sidekernel and top-level files are not in the sandbox.
+        let inMount = canonical == mounted || canonical.hasPrefix(mounted + "/")
+        if inMount && (mounted != HomeShare.home || HomeShare.shows(canonical)) {
             close(fd)
-            return .refused("already in the sandbox")
+            return .refused("already in the sandbox at /workspace\(canonical.dropFirst(mounted.count))")
         }
         switch status.st_mode & S_IFMT {
         case S_IFREG:

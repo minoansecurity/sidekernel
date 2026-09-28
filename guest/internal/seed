@@ -1,10 +1,15 @@
 #!/bin/sh
 # Merges the host's read-only seed into the agent config, then execs the command.
 # All config writes happen here, guest-side, so nothing the guest plants can redirect a host write.
+# With --lazy, the slow copy runs in the background and the shell's `claude` waits for it.
 set -u
+
+LAZY=no
+[ "${1:-}" = --lazy ] && { LAZY=yes; shift; }
 
 SEED="${SK_ROOT:-}/run/sk-seed/claude"
 CONFIG="${CLAUDE_CONFIG_DIR:-${SK_ROOT:-}/run/sk-project/claude}"
+PENDING="${SK_ROOT:-}/run/sk-seed.pending"
 
 # A deleted seed entry forces a re-copy.
 seeded_in_place() {
@@ -15,6 +20,21 @@ seeded_in_place() {
             [ -e "$CONFIG/$sub/${entry##*/}" ] || [ -L "$CONFIG/$sub/${entry##*/}" ] || return 1
         done
     done
+}
+
+copy_seed() {
+    rm -f "$stamp"   # invalid until every entry has landed
+    copied=yes
+    for sub in skills commands agents plugins; do
+        [ -d "$SEED/$sub" ] || continue
+        mkdir -p "$CONFIG/$sub" || copied=no
+        for entry in "$SEED/$sub"/* "$SEED/$sub"/.[!.]* "$SEED/$sub"/..?*; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            rm -rf "$CONFIG/$sub/${entry##*/}"
+            cp -a "$entry" "$CONFIG/$sub/" || copied=no
+        done
+    done
+    [ "$copied" = yes ] && cp "$SEED/seed.fp" "$stamp" 2> /dev/null || true
 }
 
 if [ -d "$SEED" ] && mkdir -p "$CONFIG" 2> /dev/null; then
@@ -28,18 +48,13 @@ if [ -d "$SEED" ] && mkdir -p "$CONFIG" 2> /dev/null; then
     # every entry is in place: copying over virtiofs costs seconds per launch.
     stamp="$CONFIG/.sk-seed.fp"
     if ! { cmp -s "$SEED/seed.fp" "$stamp" && seeded_in_place; }; then
-        rm -f "$stamp"   # invalid until every entry has landed
-        copied=yes
-        for sub in skills commands agents plugins; do
-            [ -d "$SEED/$sub" ] || continue
-            mkdir -p "$CONFIG/$sub" || copied=no
-            for entry in "$SEED/$sub"/* "$SEED/$sub"/.[!.]* "$SEED/$sub"/..?*; do
-                [ -e "$entry" ] || [ -L "$entry" ] || continue
-                rm -rf "$CONFIG/$sub/${entry##*/}"
-                cp -a "$entry" "$CONFIG/$sub/" || copied=no
-            done
-        done
-        [ "$copied" = yes ] && cp "$SEED/seed.fp" "$stamp" 2> /dev/null || true
+        if [ "$LAZY" = yes ]; then
+            # Marked before the fork, so `claude` can never miss it.
+            : > "$PENDING"
+            ( copy_seed; rm -f "$PENDING" ) < /dev/null > /dev/null 2>&1 &
+        else
+            copy_seed
+        fi
     fi
 
     # Host enabledPlugins, merged over the guest's settings.

@@ -3,7 +3,7 @@ import Darwin
 
 @main
 public enum CLI {
-    static let version = "0.1.1"
+    static let version = "0.1.2"
 
     public static func main() {
         if let agent = Agent.invoked(argv0: CommandLine.arguments.first ?? "") {
@@ -26,6 +26,7 @@ public enum CLI {
 
     static func runShell() -> Int32 {
         do {
+            try checkHostDir()
             try Agent.provisionDetected()
             return try launch(command: nil)
         } catch { return fail(error) }
@@ -34,6 +35,7 @@ public enum CLI {
     /// On 127 (command not found), installs the agent and retries once.
     static func runAgent(_ agent: Agent, passthrough: [String]) -> Int32 {
         do {
+            try checkHostDir()
             try Agent.provisionDetected()
             var code = try launch(command: agent.launchCommand(passthrough))
             if code == 127 {
@@ -50,6 +52,87 @@ public enum CLI {
             networkOn: networkOn, waitForNetwork: false, quiet: false)
         return try Sandbox(options: options, artifacts: provisionOnce(),
                            credentials: Credentials()).run()
+    }
+
+    /// The current folder becomes /workspace, which the agent may read, edit or delete.
+    /// Every new folder gets a casual ask, remembered on yes; ~, secrets and system folders
+    /// warn every time. Only what contains ~ or lives in ~/.sidekernel is refused.
+    static func checkHostDir(_ dir: String = FileManager.default.currentDirectoryPath) throws {
+        switch hostDirRisk(dir) {
+        case .refuse(let why):
+            throw SidekernelError.unsafeDir("not starting here: \(why)\n  cd into a project folder and run it there.")
+        case .ask(let why):
+            guard !allowedDirs.contains(resolvedPath(dir)) else { return }
+            guard isatty(STDIN_FILENO) != 0 else { return }
+            guard confirm("\(why) [y/N] ") else { throw SidekernelError.unsafeDir("not started") }
+            rememberAllowed(resolvedPath(dir))
+        case .warn(let why):
+            FileHandle.standardError.write(Data(("\(Terminal.red)⚠ \(why)\(Terminal.reset)\n"
+                + "  The sandbox can read, edit or delete everything in it.\n").utf8))
+            // Nobody to ask: say it loudly and carry on.
+            guard isatty(STDIN_FILENO) != 0 else { return }
+            guard confirm("  Start here anyway? [y/N] ") else { throw SidekernelError.unsafeDir("not started") }
+        }
+    }
+
+    enum HostDirRisk: Equatable { case refuse(String), warn(String), ask(String) }
+
+    static func hostDirRisk(_ dir: String) -> HostDirRisk {
+        let here = resolvedPath(dir)
+        let home = resolvedPath(FileManager.default.homeDirectoryForCurrentUser.path)
+        let inside = { (root: String) in here == root || here.hasPrefix(root + "/") }
+        let tilde = { (path: String) in path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path }
+
+        if here == "/" || home.hasPrefix(here + "/") {
+            return .refuse("\(tilde(here)) contains your whole home folder.")
+        }
+        if inside("\(home)/.sidekernel") {
+            return .refuse("\(tilde(here)) is SideKernel's own state.")
+        }
+        if here == home {
+            return .warn("~ is your whole home folder (~/.sidekernel stays hidden).")
+        }
+        // Secrets and the system, at any depth.
+        let secret = [".ssh", ".gnupg", ".aws", ".kube", ".docker", "Library"].map { "\(home)/\($0)" }
+        let system = ["/System", "/Library", "/usr", "/bin", "/sbin", "/opt",
+                      "/private/etc", "/private/var/db", "/private/var/root"]
+        if let root = (secret + system).first(where: inside),
+           !inside("\(home)/Library/Mobile Documents") {  // iCloud Drive projects are fine
+            return .warn("\(tilde(here)) is inside \(tilde(root)).")
+        }
+        // Full of unrelated files; a project inside them is fine.
+        let crowded = ["\(home)/Desktop", "\(home)/Documents", "\(home)/Downloads", "\(home)/.config",
+                       "/Applications", "/Volumes", "/Users/Shared"]
+        if crowded.contains(here) {
+            return .ask("\(tilde(here)) is not a project folder. Start here anyway?")
+        }
+        return .ask("You are about to start a sandbox inside \(tilde(here)). Continue?")
+    }
+
+    static func resolvedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    }
+
+    private static func confirm(_ prompt: String) -> Bool {
+        // Typed or pasted before the question, so it is not an answer to it.
+        tcflush(STDIN_FILENO, TCIFLUSH)
+        FileHandle.standardError.write(Data(prompt.utf8))
+        let answer = (readLine() ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        return answer == "y" || answer == "yes"
+    }
+
+    /// Folders you said yes to, one path per line.
+    private static let allowedFile = Agent.Paths.root.appending(path: "allowed-dirs")
+
+    private static var allowedDirs: Set<String> {
+        let text = (try? String(contentsOf: allowedFile, encoding: .utf8)) ?? ""
+        return Set(text.split(separator: "\n").map(String.init))
+    }
+
+    private static func rememberAllowed(_ dir: String) {
+        let lines = (allowedDirs.union([dir])).sorted().joined(separator: "\n") + "\n"
+        try? FileManager.default.createDirectory(at: Agent.Paths.root, withIntermediateDirectories: true)
+        try? lines.write(to: allowedFile, atomically: true, encoding: .utf8)
     }
 
     /// Any non-empty SK_NO_NETWORK, even "0", boots offline.
@@ -197,7 +280,7 @@ public enum CLI {
 }
 
 public enum SidekernelError: Error, CustomStringConvertible {
-    case provisioning(String), vm(String), agentProtocol(String), timeout(String)
+    case provisioning(String), vm(String), agentProtocol(String), timeout(String), unsafeDir(String)
 
     public var description: String {
         switch self {
@@ -205,6 +288,7 @@ public enum SidekernelError: Error, CustomStringConvertible {
         case .vm(let m): return m
         case .agentProtocol(let m): return "agent protocol: \(m)"
         case .timeout(let m): return "timed out: \(m)"
+        case .unsafeDir(let m): return m
         }
     }
 }

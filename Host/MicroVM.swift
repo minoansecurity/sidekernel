@@ -205,7 +205,13 @@ public final class MicroVM: NSObject {
 
         var shares: [VZDirectorySharingDeviceConfiguration] = []
         if let workspaceDir = spec.workspaceDir {
-            shares.append(Self.share(tag: "workspace", url: URL(fileURLWithPath: workspaceDir), readOnly: false))
+            if let folders = HomeShare.folders(for: workspaceDir) {
+                let device = VZVirtioFileSystemDeviceConfiguration(tag: "workspace")
+                device.share = VZMultipleDirectoryShare(directories: folders)
+                shares.append(device)
+            } else {
+                shares.append(Self.share(tag: "workspace", url: URL(fileURLWithPath: workspaceDir), readOnly: false))
+            }
         }
         // Share roots the guest cannot re-point: the host never writes inside the project share,
         // and it builds the seed fresh each boot in a place the guest can only read.
@@ -290,6 +296,49 @@ private final class ServiceAcceptDelegate: NSObject, VZVirtioSocketListenerDeleg
         connection.close()
         guard fd >= 0 else { return false }
         onConnection(fd)
+        return true
+    }
+}
+
+/// With ~ as the folder, /workspace is every top-level folder of ~ except SideKernel's own state.
+/// One VirtioFS share cannot leave a subfolder out, so ~ is shared folder by folder: top-level
+/// files are not shared, /workspace itself takes no new entries, and new folders need a new sk.
+enum HomeShare {
+    static let hidden: Set<String> = [".sidekernel"]
+
+    static var home: String {
+        FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
+    }
+
+    /// nil unless `dir` is the home folder.
+    static func folders(for dir: String) -> [String: VZSharedDirectory]? {
+        let home = home
+        guard URL(fileURLWithPath: dir).resolvingSymlinksInPath().path == home,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: home) else { return nil }
+        var folders: [String: VZSharedDirectory] = [:]
+        for name in names where isShared(name, in: home) {
+            folders[name] = VZSharedDirectory(url: URL(fileURLWithPath: "\(home)/\(name)"), readOnly: false)
+        }
+        return folders
+    }
+
+    /// Whether a canonical host path under ~ shows up in /workspace when ~ is the folder.
+    static func shows(_ canonical: String) -> Bool {
+        let home = home
+        guard canonical.hasPrefix(home + "/") else { return canonical == home }
+        let name = String(canonical.dropFirst(home.count + 1).prefix { $0 != "/" })
+        return isShared(name, in: home)
+    }
+
+    /// Real folders only: a symlink would lead the share out of ~. Folders macOS will not
+    /// open for us (~/.Trash without Full Disk Access) make the whole share invalid.
+    private static func isShared(_ name: String, in home: String) -> Bool {
+        guard !hidden.contains(name), (try? VZMultipleDirectoryShare.validateName(name)) != nil else { return false }
+        let path = "\(home)/\(name)"
+        var status = stat()
+        guard lstat(path, &status) == 0, status.st_mode & S_IFMT == S_IFDIR else { return false }
+        guard let dir = opendir(path) else { return false }
+        closedir(dir)
         return true
     }
 }

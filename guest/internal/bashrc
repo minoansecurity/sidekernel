@@ -25,6 +25,17 @@ __sk_ps1() {
 }
 PROMPT_COMMAND=__sk_ps1
 
+# The first launch in a folder copies skills and plugins in the background (see seed).
+claude() {
+    local pending="${SK_ROOT:-}/run/sk-seed.pending" tries=0
+    if [ -e "$pending" ]; then
+        printf '  copying your skills and plugins…\n' >&2
+        # Two minutes at most, in case the copy was killed.
+        while [ -e "$pending" ] && [ "$tries" -lt 600 ]; do sleep 0.2; tries=$((tries + 1)); done
+    fi
+    command claude "$@"
+}
+
 # sk-drop takes a host path, which no guest completion could know.
 complete -W 'status on off' sk-net
 complete -W '' sk-drop save ramblinwreck fightsong
