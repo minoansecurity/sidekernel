@@ -1,0 +1,35 @@
+#!/bin/sh
+# Kill switch: off is instant, on needs approval on the host.
+set -eu
+
+STATE="${SK_ROOT:-}/run/sk-net.state"
+
+[ "$#" -le 1 ] || { echo "usage: sk-net [status|on|off]" >&2; exit 1; }
+case "${1:-status}" in
+    status)
+        # Display only: the posture the agent last published, else whether a default route exists.
+        if [ -r "$STATE" ]; then
+            state=$(cat "$STATE")
+        elif awk '$1 == "eth0" && $2 == "00000000" { found = 1 } END { exit !found }' \
+                /proc/net/route 2>/dev/null; then
+            state=on
+        else
+            state=off
+        fi
+        if [ "$state" = on ]; then
+            echo "network: on (open, full internet)"
+        else
+            echo "network: off (pinned, the Claude API lane stays available)"
+        fi
+        exit 0 ;;
+    on)
+        printf '  ⋯ waiting for host approval…\n'
+        /run/sidekernel/libexec/sk-agent ctl net on
+        echo "  ✓ network on (open, full internet)" ;;
+    off)
+        /run/sidekernel/libexec/sk-agent ctl net off
+        echo "  ✓ network off (pinned, the Claude API lane stays available)" ;;
+    *)
+        echo "usage: sk-net [status|on|off]" >&2
+        exit 1 ;;
+esac

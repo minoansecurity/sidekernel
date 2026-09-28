@@ -1,0 +1,11 @@
+#!/bin/sh
+# Hands one host file or folder from outside /workspace into /root/.sk-drops, once the host approves.
+set -eu
+
+case "${1:-}" in
+    /*) [ "$#" -eq 1 ] || { echo "usage: sk-drop /absolute/host/path" >&2; exit 1; } ;;
+    *)  echo "sk-drop: the path must be absolute, as seen on the host." >&2; exit 1 ;;
+esac
+
+printf '  ⋯ waiting for host approval…\n'
+exec /run/sidekernel/libexec/sk-agent ctl drop "$1"

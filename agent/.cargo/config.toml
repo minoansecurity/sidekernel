@@ -1,0 +1,4 @@
+# rust-lld, so no cross-gcc is needed. Scoped to this target: Apple's ld64 rejects these flags.
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]

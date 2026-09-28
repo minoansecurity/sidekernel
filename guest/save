@@ -1,0 +1,135 @@
+#!/bin/sh
+# Rebuilds the personal layer on the staging disk and asks the host to publish it.
+set -eu
+
+# Empty in a sandbox; set for offline testing.
+ROOT="${SK_ROOT:-}"
+SESSION="$ROOT/.sk/upper"
+PERSONAL="$ROOT/.sk/personal/upper"
+STAGING="$ROOT/staging"
+TARGET="$STAGING/upper"
+
+TAB=$(printf '\t')
+
+# "mark<TAB>path<TAB>files" rows (+ added or changed, − removed), deep paths folded into their
+# directory. At most $2 rows, then "…<TAB>N more".
+changes() {
+    find "$1" -path "$1/root/.sk-drops" -prune -o -type c -printf '−\t/%P\n' -o ! -type d -printf '+\t/%P\n' \
+        | sort -t "$TAB" -k2 | awk -F '\t' -v cap="$2" '
+            {
+                n = split($2, part, "/")
+                key = $1 "\t" (n > 5 ? "/" part[2] "/" part[3] "/" part[4] "/" part[5] : $2)
+                if (!(key in count)) { order[++keys] = key; first[key] = $2 }
+                count[key]++
+            }
+            END {
+                for (i = 1; i <= keys && i <= cap; i++) {
+                    split(order[i], k, "\t")
+                    if (count[order[i]] == 1) printf "%s\t%s\t1\n", k[1], first[order[i]]
+                    else printf "%s\t%s/\t%d\n", k[1], k[2], count[order[i]]
+                }
+                if (keys > cap) printf "…\t%d more\t1\n", keys - cap
+            }'
+}
+
+show() {
+    changes "$1" "$2" | while IFS="$TAB" read -r mark path files; do
+        if [ "$files" = 1 ]; then printf '  %s %s\n' "$mark" "$path"
+        else printf '  %s %s (%s files)\n' "$mark" "$path" "$files"; fi
+    done
+}
+
+if [ "${1:-}" = --list ]; then
+    if [ ! -d "$PERSONAL" ] || [ -z "$(find "$PERSONAL" -mindepth 1 -print -quit)" ]; then
+        echo "Nothing saved yet."
+        exit 0
+    fi
+    echo "Saved in your personal layer as this sandbox booted (every sandbox starts with it):"
+    show "$PERSONAL" 200
+    exit 0
+fi
+
+if [ -e "$ROOT/run/sk-degraded" ]; then
+    echo "save: the personal layer failed to mount this boot, so saving now would publish a personal layer without it." >&2
+    echo "save: exit this sandbox and start a fresh one, then save again." >&2
+    exit 1
+fi
+if [ ! -d "$SESSION" ] || [ ! -r "$ROOT/run/sk-staging-device" ]; then
+    echo "save isn't available here." >&2
+    exit 1
+fi
+if [ -z "$(find "$SESSION" -mindepth 1 -print -quit)" ]; then
+    echo "Nothing to save: you haven't changed anything in this sandbox yet."
+    exit 0
+fi
+
+echo "This session's changes, to be kept in every future sandbox:"
+show "$SESSION" 40
+[ ! -d "$PERSONAL" ] || echo "  (plus what you saved before: \`save --list\`)"
+
+# Every save unmounts staging when it finishes, so a second one remounts it here.
+if ! grep -q " $STAGING " /proc/self/mounts; then
+    mount -o nosuid,nodev,noexec "$(cat "$ROOT/run/sk-staging-device")" "$STAGING"
+fi
+rm -rf "$TARGET"
+mkdir -p "$TARGET"
+
+# Pass 1: the saved layer. Read errors there are tolerated; the extract side still fails loudly.
+included=0
+if [ -d "$PERSONAL" ]; then
+    tar -C "$PERSONAL" --xattrs --xattrs-include='*' -cpf - . \
+        | tar -C "$TARGET" --xattrs --xattrs-include='*' -xpf -
+    included=1
+fi
+
+# Pass 2: prune what the live root no longer shows; that root is the kernel's own merge.
+find "$TARGET" -depth -mindepth 1 -exec sh -c '
+    set -eu
+    layer=$1; live=$2; session=$3; shift 3
+    exists() { [ -e "$1" ] || [ -L "$1" ]; }
+    is_dir() { [ -d "$1" ] && [ ! -L "$1" ]; }
+    for staged in "$@"; do
+        exists "$staged" || continue    # inside an already-pruned directory
+        rel=${staged#"$layer"}
+        if [ -c "$staged" ] && [ "$(stat -c %t:%T "$staged")" = 0:0 ]; then
+            if is_dir "$session$rel"; then rm -rf "$staged"; fi
+        elif ! exists "$live$rel"; then
+            rm -rf "$staged"
+        elif is_dir "$staged"; then
+            if ! is_dir "$live$rel"; then rm -rf "$staged"; fi
+        elif is_dir "$live$rel"; then
+            rm -rf "$staged"
+        fi
+    done
+' fixpass "$TARGET" "$ROOT" "$SESSION" {} +
+
+# Pass 3: this session on top; tar replaces every remaining collision in place.
+tar -C "$SESSION" --xattrs --xattrs-include='*' -cpf - . \
+    | tar -C "$TARGET" --xattrs --xattrs-include='*' -xpf -
+
+# Drops are one-off, never kept.
+rm -rf "$TARGET/root/.sk-drops"
+
+printf '  · %s total in your personal layer\n' "$(du -sh "$TARGET" | cut -f1)"
+
+# Best effort, for `sidekernel saved`: the total, then a "size<TAB>path" row per entry.
+LISTING="${SK_LISTING:-$ROOT/run/sk-project/save-listing}"
+mkdir -p "$(dirname "$LISTING")" 2> /dev/null || true
+{
+    du -sh "$TARGET" | cut -f1
+    changes "$TARGET" 200 | while IFS="$TAB" read -r mark path files; do
+        case $mark in
+            +) size=$(du -sh "$TARGET$path" | cut -f1) ;;
+            −) size=removed ;;
+            *) size=… ;;
+        esac
+        if [ "$files" = 1 ]; then printf '%s\t%s\n' "$size" "$path"
+        else printf '%s\t%s (%s files)\n' "$size" "$path" "$files"; fi
+    done
+} > "$LISTING" 2> /dev/null || true
+
+# Settle every byte and release the image, so the host reads it cold.
+sync
+umount "$STAGING"
+/run/sidekernel/libexec/sk-agent ctl save "$included"
+echo "  ✓ saved to your personal layer (every sandbox will have it)."

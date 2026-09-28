@@ -1,0 +1,40 @@
+#!/bin/sh
+# Stands in for xclip, wl-paste, wl-copy and pbcopy, relaying to the host pasteboard.
+set -eu
+
+# The Mac has no primary selection, and Claude Code writes it right after the clipboard.
+for a in "$@"; do case "$a" in --primary|primary) exit 0 ;; esac; done
+
+# The tool name picks the direction; for xclip, -o means read.
+dir='write'
+case "${0##*/}" in
+    wl-paste)  dir='read' ;;
+    wl-copy|pbcopy) dir='write' ;;
+    *) for a in "$@"; do case "$a" in -o|-ou|-out) dir='read' ;; esac; done ;;
+esac
+
+if [ "$dir" = write ]; then
+    if [ "${0##*/}" = wl-copy ] && [ "$#" -gt 0 ]; then
+        printf '%s' "$*" | /run/sidekernel/libexec/sk-agent ctl copy
+    else
+        /run/sidekernel/libexec/sk-agent ctl copy
+    fi
+    exit
+fi
+
+# Settle the target before asking the host, so an unknown one fails like an empty clipboard.
+mode=
+for a in "$@"; do
+    case "$a" in
+        image/*) mode=bytes ;;
+        TARGETS|-l|--list-types) [ -n "$mode" ] || mode=list ;;
+    esac
+done
+[ -n "$mode" ] || exit 1
+
+# A deny must look like an empty clipboard: exit 1, nothing printed.
+if [ "$mode" = bytes ]; then
+    exec /run/sidekernel/libexec/sk-agent ctl clip 2>/dev/null
+fi
+/run/sidekernel/libexec/sk-agent ctl clip > /dev/null 2>&1 || exit 1
+echo image/png

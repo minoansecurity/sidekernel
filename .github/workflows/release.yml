@@ -1,0 +1,45 @@
+# On a version tag: checks the version, tests the agent, creates the release, and prints the
+# sha256 for Formula/sidekernel.rb. Nothing prebuilt is published; Homebrew builds from source.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the tag matches the host version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' Host/CLI.swift | head -1)"
+          [ "$want" = "$have" ] || { echo "tag $GITHUB_REF_NAME but CLI.swift says $have"; exit 1; }
+
+      - name: Install Rust with the musl target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-unknown-linux-musl
+
+      - name: Test and build the agent
+        working-directory: agent
+        run: |
+          cargo test
+          cargo build --release --locked --target aarch64-unknown-linux-musl
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Print the formula sha256
+        run: |
+          src="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
+          sha="$(curl -fsSL "$src" | sha256sum | cut -d' ' -f1)"
+          printf '### Formula/sidekernel.rb\n```ruby\nurl "%s"\nsha256 "%s"\n```\n' "$src" "$sha" \
+            >> "$GITHUB_STEP_SUMMARY"

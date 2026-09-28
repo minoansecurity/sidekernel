@@ -1,0 +1,61 @@
+#!/bin/sh
+# Merges the host's read-only seed into the agent config, then execs the command.
+# All config writes happen here, guest-side, so nothing the guest plants can redirect a host write.
+set -u
+
+SEED="${SK_ROOT:-}/run/sk-seed/claude"
+CONFIG="${CLAUDE_CONFIG_DIR:-${SK_ROOT:-}/run/sk-project/claude}"
+
+# A deleted seed entry forces a re-copy.
+seeded_in_place() {
+    for sub in skills commands agents plugins; do
+        [ -d "$SEED/$sub" ] || continue
+        for entry in "$SEED/$sub"/* "$SEED/$sub"/.[!.]* "$SEED/$sub"/..?*; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            [ -e "$CONFIG/$sub/${entry##*/}" ] || [ -L "$CONFIG/$sub/${entry##*/}" ] || return 1
+        done
+    done
+}
+
+if [ -d "$SEED" ] && mkdir -p "$CONFIG" 2> /dev/null; then
+    # Always ours: the sandbox guidance.
+    cp -f "$SEED/CLAUDE.md" "$CONFIG/CLAUDE.md" 2> /dev/null || true
+
+    # Only where the guest has none yet: the pre-answered first-run state.
+    [ -e "$CONFIG/.claude.json" ] || cp "$SEED/.claude.json" "$CONFIG/.claude.json" 2> /dev/null || true
+
+    # Each host entry replaces the guest's copy whole. Skipped while the fingerprint matches and
+    # every entry is in place: copying over virtiofs costs seconds per launch.
+    stamp="$CONFIG/.sk-seed.fp"
+    if ! { cmp -s "$SEED/seed.fp" "$stamp" && seeded_in_place; }; then
+        rm -f "$stamp"   # invalid until every entry has landed
+        copied=yes
+        for sub in skills commands agents plugins; do
+            [ -d "$SEED/$sub" ] || continue
+            mkdir -p "$CONFIG/$sub" || copied=no
+            for entry in "$SEED/$sub"/* "$SEED/$sub"/.[!.]* "$SEED/$sub"/..?*; do
+                [ -e "$entry" ] || [ -L "$entry" ] || continue
+                rm -rf "$CONFIG/$sub/${entry##*/}"
+                cp -a "$entry" "$CONFIG/$sub/" || copied=no
+            done
+        done
+        [ "$copied" = yes ] && cp "$SEED/seed.fp" "$stamp" 2> /dev/null || true
+    fi
+
+    # Host enabledPlugins, merged over the guest's settings.
+    if [ -r "$SEED/enabled-plugins.json" ]; then
+        settings="$CONFIG/settings.json"
+        # An unreadable or non-object settings file counts as empty.
+        if [ -s "$settings" ] && merged=$(jq -s '(.[0] | objects // {}) + {enabledPlugins: .[1]}' \
+                "$settings" "$SEED/enabled-plugins.json" 2> /dev/null); then
+            :
+        else
+            merged=$(jq '{enabledPlugins: .}' "$SEED/enabled-plugins.json" 2> /dev/null) || merged=
+        fi
+        if [ -n "$merged" ]; then
+            printf '%s\n' "$merged" > "$settings.sk-tmp" && mv -f "$settings.sk-tmp" "$settings"
+        fi
+    fi
+fi
+
+exec "$@"

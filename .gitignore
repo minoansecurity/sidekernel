@@ -1,0 +1,17 @@
+# Build products
+.build/
+agent/target/
+Host/Resources/
+
+# Editor and OS cruft
+.vscode/
+.idea/
+.DS_Store
+
+# Sandbox runtime state
+.sidekernel/
+
+# Notes: only the README and SECURITY are tracked
+*.md
+!README.md
+!SECURITY.md

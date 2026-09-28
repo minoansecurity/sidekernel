@@ -1,0 +1,22 @@
+#!/bin/sh
+# The Georgia Tech fight song.
+set -eu
+
+[ "$#" -eq 0 ] || { echo "usage: ${0##*/}" >&2; exit 1; }
+
+cat << 'EOF'
+I’m a Ramblin’ Wreck from Georgia Tech and a hell of an engineer
+A helluva’, helluva helluva helluva helluva engineer
+Like all the jolly good fellows I drink my whiskey clear
+I’m a Ramblin’ Wreck from Georgia Tech and a hell of an engineer
+
+Oh, if I had a daughter sir, I’d dress her in white and gold
+And put her on the campus, sir, to cheer on the brave and bold
+And if I had a son, sir, I’d tell you what he’d do
+He would yell “To Hell With georgia” like his daddy used to do
+
+Oh, I wish I had a barrel of rum and sugar three thousand pounds
+A college bell to put it in and a clapper to stir it around
+I’d drink to all the good fellows who come from far and near
+I’m a ramblin’ gamblin’ hell of an engineer! Hey!
+EOF
