@@ -176,10 +176,21 @@ public final class MicroVM: NSObject {
 
     // MARK: - Configuration
 
+    /// The request, capped so an 8 GB Mac keeps 4 GB for itself and Virtualization accepts it.
+    static func memorySize(requestedMB: Int) -> UInt64 {
+        let mib: UInt64 = 1 << 20
+        let physical = ProcessInfo.processInfo.physicalMemory
+        let hostShare = physical > 6 << 30 ? physical - (4 << 30) : physical / 2
+        let size = min(UInt64(max(requestedMB, 1)) * mib, hostShare,
+                       VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+        // Whole MiB, as Virtualization requires.
+        return max(size / mib * mib, VZVirtualMachineConfiguration.minimumAllowedMemorySize)
+    }
+
     private func buildConfiguration() throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
-        configuration.cpuCount = max(spec.cpuCount, 1)
-        configuration.memorySize = UInt64(spec.memoryMB) << 20
+        configuration.cpuCount = min(max(spec.cpuCount, 1), VZVirtualMachineConfiguration.maximumAllowedCPUCount)
+        configuration.memorySize = Self.memorySize(requestedMB: spec.memoryMB)
         configuration.platform = VZGenericPlatformConfiguration()
         configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
         configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
