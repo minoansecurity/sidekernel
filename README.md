@@ -30,6 +30,7 @@ Requires an Apple silicon Mac on macOS 26 Tahoe (tested on M1 and M4, macOS 26.2
 
 ```sh
 brew tap minoansecurity/sidekernel https://github.com/minoansecurity/sidekernel
+brew trust --formula minoansecurity/sidekernel/sidekernel
 brew install sidekernel
 ```
 
