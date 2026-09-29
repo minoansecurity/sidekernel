@@ -3,7 +3,7 @@ import Darwin
 
 @main
 public enum CLI {
-    static let version = "0.1.2"
+    static let version = "0.1.3"
 
     public static func main() {
         if let agent = Agent.invoked(argv0: CommandLine.arguments.first ?? "") {
