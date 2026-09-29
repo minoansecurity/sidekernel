@@ -10,30 +10,39 @@
 </p>
 
 
+SideKernel is a usable sandbox for AI coding agents (e.g. Claude Code). "Usable" means it tries stays out of your way and to feel as if its not there. It is developed as a capstone project for Georgia Tech's MSc in Cybersecurity.
 
-SideKernel is a research project, developed as a capstone for Georgia Tech's MSc in Cybersecurity, that pushes the boundaries of microVMs in the trade-off between security and usability. It's an easy-to-use isolated environment for AI coding agents, built for the everyday developer, addressing common usability barriers that typically hinder sandbox adoption. Here are a few ideas that it implements:
+Beyond AI agents, SideKernel is useful for trying out software without installing it on your host (e.g. untrusted npm packages).
 
-- The current folder is the sandbox. Changing a file in SideKernel changes it on the host and vice versa, and SideKernel has memory (e.g. of the Claude Code conversations) that happened inside this directory, inside the sandbox.
-- Dropping a file from the host to the sandbox is seamless *from inside the sandbox*, with explicit host approval if not mounted. 
-- Exposed sandbox ports > 1024 are automatically available on the host (unless already taken on the host).
-- Has a network switch to block all internet/external traffic, while the Claude agent still works.
-- Copy and paste works between the host and SideKernel's Claude sessions, for text and images: just like on the host.
-- One Claude login authenticating on the Mac or inside a sandbox authenticates both.
-- Claude Code feels and behaves as configured on the host (e.g. Skills, Plugins etc. are automatically transferred)
+<details>
+<summary><b>Features:</b></summary>
+
+- The current folder is the sandbox: files sync both ways, and AI conversations persist across restarts.
+- Ports opened in the sandbox are auto-forwarded to the host.
+- Copy/paste of text and images works in and out of the sandbox (with most VMs it doesn't).
+- The host's Claude config (skills, plugins) carries over to the sandbox.
+- A network kill switch blocks all traffic when the sandbox holds sensitive data, while Claude keeps working.
+- Log in to Claude once, on the host or in the sandbox, and both are authenticated.
+- Non-mounted files are easy to bring in with `sk-drop <path>`, or by dragging and dropping them into Claude.
+- The in-sandbox `save` command creates a personal layer that persists files, configs and installations across sandboxes.
+</details>
+
 
 > [!NOTE]
-> SideKernel is still in research preview. It is not intended for production use. Use responsibly. Please, read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Paper</b></a> or the <a href="https://sidekernel.com"><b>Site</b></a> to learn more.
+> SideKernel is still in research preview and not yet ready for production use. Use it responsibly. Please read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Paper</b></a> or the <a href="https://sidekernel.com"><b>sidekernel.com</b></a> to learn more.
 
 ## Install
 
-Requires an Apple silicon Mac on macOS 26 Tahoe (tested on M1 and M4, macOS 26.2).
+Tested on M1 and M4 (macOS 26.2); other Apple silicon chips should work.
+
+Install with `brew` (recommended)
 
 ```sh
 brew tap minoansecurity/sidekernel https://github.com/minoansecurity/sidekernel && brew trust --formula minoansecurity/sidekernel/sidekernel
 brew install sidekernel
 ```
 
-Or from source:
+Install directly from source:
 
 ```sh
 rustup target add aarch64-unknown-linux-musl
@@ -42,31 +51,43 @@ cd sidekernel
 make install
 ```
 
-The first run builds the root filesystem.
+The first run builds the root filesystem so it might take a minute or two. 
 
 ## Usage
 
-On the host, inside a project folder:
+**On the host** (from a project folder):
 
-- `sk` (or `sidekernel`) launches a new ephemeral microVM, and the current directory of the host is automatically mounted.
-- SideKernel also provides a faster way to start Claude: running `sclaude` directly on the host.
+```bash
+sk          # launch an ephemeral microVM, current directory mounted
+sidekernel  # (alias: sk)
+sclaude     # launch a sandbox and start Claude Code directly
+```
 
-Inside the sandbox:
+Coming soon: `scodex`, `sgemini`, `sgrok`, and more.
 
-- `sk-drop <host-path>`, combined with explicit user approval outside the sandbox, drops external files into SideKernel (or drag and drop directly into Claude Code).
-- `sk-net off` blocks all outbound traffic; `sk-net on` requires explicit user approval.
-- With `save`, installed packages persist across sandboxes.
-- `ramblinwreck` (or `fightsong`) prints the Georgia Tech fight song.
+**Inside the sandbox:**
 
-## Limitations
+```bash
+sk-drop <host-path>   # copy a host file into the sandbox (requires approval on the host)
+sk-net on/off         # block all outbound traffic
+save                  # persist installed packages across sandboxes
+fightsong             # Print's Georgia Tech's fight song on the terminal 🐝 (alias: ramblinwreck)
+```
+
+You can also **drag and drop** files directly into Claude Code.
+
+<details>
+<summary><b>Limitations</b></summary>
 
 - The agent may read, edit or destroy anything in the mounted directory.
 - A malicious agent can open ports to the host, exposing malicious services.
-- Only Claude Code is integrated, other harnesses such as Codex are planned.
-- The security of SideKernel is implied from an architectural perspective, but the implementation has not undergone a formal security review. It is still in research preview, and therefore not yet suitable for production deployments.
-- SideKernel is not yet notarized (and it is self-signed).
+- Only Claude Code is integrated; other harnesses such as Codex are planned.
+- SideKernel's security rests on its architecture, but the implementation has not had a formal security review.
+- SideKernel is not yet notarized (it is self-signed).
 
-The full list is in the [paper](https://sidekernel.com/sidekernel.pdf).
+The full list is in the [paper](https://sidekernel.com/sidekernel.pdf) and on the [website](https://sidekernel.com/).
+
+</details>
 
 ## License
 
