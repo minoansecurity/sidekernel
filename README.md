@@ -74,9 +74,8 @@ A few things worth knowing:
 - **I've tried to keep it as lean as possible.** I've minimized the TCB and periodically review the code for security issues myself.
 - **Usability has a cost.** Every feature that makes the sandbox feel native (file sharing, clipboard, port forwarding, bringing host tools along) means more code, which means more attack surface.
 - **Escapes have been found, and more likely exist.** I found and fixed several bugs and vulnerabilities before release, and there's no reason to assume none remain. Sandboxes from large companies have had severe vulnerabilities too (e.g. CVE-2026-77179).
-- **One maintainer, for now.** Reports are welcome and taken seriously, but fixes may take a little while. The project is still small and it's just me at the moment. Contributions are welcome.
 
-None of this is unique to SideKernel; I'd just rather be upfront about it. Using a sandbox is very likely better than not using one, and letting agents work freely inside it is exactly what it's for. Just don't let it lull you into a false sense of security. Keep what you expose to it (shared folders, credentials, network access) limited to what the task needs, and keep in mind that any security control can fail: cybersecurity is ultimately risk management, not risk elimination.
+Most of this isn't unique to SideKernel; I'd just rather be upfront about it. Using a sandbox is very likely better than not using one, and letting agents work freely inside it is exactly what it's for. Just don't let it lull you into a false sense of security. Keep what you expose to it (shared folders, credentials, network access) limited to what the task needs, and keep in mind that any security control can fail: cybersecurity is ultimately risk management, not risk elimination.
 
 **In short:**
 
@@ -89,7 +88,8 @@ None of this is unique to SideKernel; I'd just rather be upfront about it. Using
 
 For more on the threat model and limitations, see the [paper](https://sidekernel.com/sidekernel.pdf), the [website](https://sidekernel.com/) and, of course, the code itself.
 
-Found a vulnerability? Please [report it privately on GitHub](https://github.com/minoansecurity/sidekernel/security/advisories/new).
+Found a vulnerability? Please [report it privately on GitHub](https://github.com/minoansecurity/sidekernel/security/advisories/new). Reports are welcome and taken seriously, but fixes may take a little while. The project is still small and it's just me at the moment. Contributions are welcome.
+
 ## Learn more
 
 - [Note from the developer](https://sidekernel.com/essay/): the motivation and the honest trade-offs
