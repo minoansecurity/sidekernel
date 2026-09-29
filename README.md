@@ -14,19 +14,6 @@ SideKernel is a usable sandbox for AI coding agents (e.g. Claude Code). "Usable"
 
 Beyond AI agents, SideKernel is useful for trying out software without installing it on your host (e.g. untrusted npm packages).
 
-<details>
-<summary><b>Features:</b></summary>
-
-- The current folder is the sandbox: files sync both ways, and AI conversations persist across restarts.
-- Ports opened in the sandbox are auto-forwarded to the host.
-- Copy/paste of text and images works in and out of the sandbox (with most VMs it doesn't).
-- The host's Claude config (skills, plugins) carries over to the sandbox.
-- A network kill switch blocks all traffic when the sandbox holds sensitive data, while Claude keeps working.
-- Log in to Claude once, on the host or in the sandbox, and both are authenticated.
-- Non-mounted files are easy to bring in with `sk-drop <path>`, or by dragging and dropping them into Claude.
-- The in-sandbox `save` command creates a personal layer that persists files, configs and installations across sandboxes.
-</details>
-
 
 > [!NOTE]
 > SideKernel is still in research preview and not yet ready for production use. Use it responsibly. Please read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Paper</b></a> or the <a href="https://sidekernel.com"><b>sidekernel.com</b></a> to learn more.
@@ -76,16 +63,7 @@ fightsong             # Print's Georgia Tech's fight song on the terminal 🐝 (
 
 You can also **drag and drop** files directly into Claude Code.
 
-<details>
-<summary><b>Limitations</b></summary>
-
-- The agent may read, edit or destroy anything in the mounted directory.
-- A malicious agent can open ports to the host, exposing malicious services.
-- Only Claude Code is integrated; other harnesses such as Codex are planned.
-- SideKernel's security rests on its architecture, but the implementation has not had a formal security review.
-- SideKernel is not yet notarized (it is self-signed).
-
-The full list is in the [paper](https://sidekernel.com/sidekernel.pdf) and on the [website](https://sidekernel.com/).
+More details on SideKernel can be found on the [website](https://sidekernel.com/) and the capstone [paper](https://sidekernel.com/sidekernel.pdf)
 
 </details>
 
