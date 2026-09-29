@@ -86,14 +86,14 @@ Most of this isn't unique to SideKernel; I'd just rather be upfront about it. Us
 - **Do I think SideKernel is reasonably secure?** Yes.
 - **Can I guarantee that SideKernel is secure?** No.
 
-For more on the threat model and limitations, see the [paper](https://sidekernel.com/sidekernel.pdf), the [website](https://sidekernel.com/) and, of course, the code itself.
+For more on the threat model and limitations, see the [practicum report](https://sidekernel.com/sidekernel.pdf), the [website](https://sidekernel.com/) and, of course, the code itself.
 
 Found a vulnerability? Please [report it privately on GitHub](https://github.com/minoansecurity/sidekernel/security/advisories/new). Reports are welcome and taken seriously, but fixes may take a little while. The project is still small and it's just me at the moment. Contributions are welcome.
 
 ## Learn more
 
 - [Note from the developer](https://sidekernel.com/essay/): the motivation and the honest trade-offs
-- [Paper](https://sidekernel.com/sidekernel.pdf): the capstone paper with design and evaluation details
+- [Practicum Report](https://sidekernel.com/sidekernel.pdf): the capstone final report with design and evaluation details
 - [Website](https://sidekernel.com/)
 
 
