@@ -4,13 +4,13 @@
 </picture>
 
 <p align="center">
-  <a href="https://sidekernel.com/sidekernel.pdf"><b>Paper</b></a> &nbsp;·&nbsp;
+  <a href="https://sidekernel.com/sidekernel.pdf"><b>Report</b></a> &nbsp;·&nbsp;
   <a href="https://sidekernel.com"><b>Site</b></a> &nbsp;·&nbsp;
   <a href="https://sidekernel.com/essay/"><b>Note from the developer</b></a>
 </p>
 
 
-SideKernel is a usable sandbox for AI coding agents (e.g. Claude Code). "Usable" means it tries stays out of your way and to feel as if its not there. It is developed as a capstone project for Georgia Tech's MSc in Cybersecurity.
+SideKernel is a usable sandbox for AI coding agents (e.g. Claude Code). "Usable" means it tries to stay out of your way and to feel as if it's not there. It is developed as a capstone project for Georgia Tech's MSc in Cybersecurity.
 
 Beyond AI agents, SideKernel is useful for trying out software without installing it on your host (e.g. untrusted npm packages).
 
@@ -29,7 +29,7 @@ Beyond AI agents, SideKernel is useful for trying out software without installin
 
 
 > [!NOTE]
-> SideKernel is still in research preview and not yet ready for production use. Use it responsibly. Please read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Paper</b></a> or the <a href="https://sidekernel.com"><b>sidekernel.com</b></a> to learn more.
+> SideKernel is still in research preview and not yet ready for production use. Use it responsibly. Please read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Report</b></a> or the <a href="https://sidekernel.com"><b>sidekernel.com</b></a> to learn more.
 
 ## Install
 
@@ -85,7 +85,7 @@ You can also **drag and drop** files directly into Claude Code.
 - SideKernel's security rests on its architecture, but the implementation has not had a formal security review.
 - SideKernel is not yet notarized (it is self-signed).
 
-The full list is in the [paper](https://sidekernel.com/sidekernel.pdf) and on the [website](https://sidekernel.com/).
+The full list is in the [report](https://sidekernel.com/sidekernel.pdf) and on the [website](https://sidekernel.com/).
 
 </details>
 
