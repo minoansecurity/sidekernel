@@ -16,6 +16,7 @@ Beyond AI agents, SideKernel is useful for trying out software without installin
 
 > [!TIP]
 > **Why does SideKernel exist?** Read the note from the developer: [*AI Coding Agents: Between Two Uncomfortable Choices*](https://sidekernel.com/essay/). 
+
 > [!NOTE]
 > SideKernel is still in research preview and not yet ready for production use. Use it responsibly. Please read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Report</b></a> or the <a href="https://sidekernel.com"><b>sidekernel.com</b></a> to learn more.
 
