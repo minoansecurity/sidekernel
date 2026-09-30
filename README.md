@@ -15,8 +15,7 @@ SideKernel is a usable sandbox for AI coding agents (e.g. Claude Code). "Usable"
 Beyond AI agents, SideKernel is useful for trying out software without installing it on your host (e.g. untrusted npm packages).
 
 > [!TIP]
-> **Why does SideKernel exist?** Read the note from the developer: [*AI Coding Agents: Between Two Uncomfortable Choices*](https://sidekernel.com/essay/). It covers the dilemma of running coding agents on your own machine, how SideKernel compares to other sandboxes, and why usability is a security problem too.
-
+> **Why does SideKernel exist?** Read the note from the developer: [*AI Coding Agents: Between Two Uncomfortable Choices*](https://sidekernel.com/essay/). 
 > [!NOTE]
 > SideKernel is still in research preview and not yet ready for production use. Use it responsibly. Please read the <a href="https://sidekernel.com/sidekernel.pdf"><b>Report</b></a> or the <a href="https://sidekernel.com"><b>sidekernel.com</b></a> to learn more.
 
