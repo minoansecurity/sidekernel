@@ -117,8 +117,7 @@ fn add_default_route(fd: &OwnedFd, gateway: [u8; 4]) -> io::Result<()> {
 }
 
 fn route_sockaddr(address: [u8; 4]) -> sys::Sockaddr {
-    let mut sockaddr = sys::Sockaddr::default();
-    sockaddr.sa_family = sys::AF_INET as u16;
+    let mut sockaddr = sys::Sockaddr { sa_family: sys::AF_INET as u16, ..Default::default() };
     sockaddr.sa_data[2..6].copy_from_slice(&address);
     sockaddr
 }

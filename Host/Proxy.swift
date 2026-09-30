@@ -27,11 +27,13 @@ public final class Proxy {
         FDIO.setReadTimeout(fd, seconds: 10)
         Self.setWriteTimeout(fd, seconds: 30)
         guard let request = Self.readRequest(fd) else { return }
-        if request.path.hasPrefix(Contract.codexProxyPath + "/"), !codex.hasCredential() {
+        let upstream: URLRequest
+        do { upstream = try prepareUpstreamRequest(request) }
+        catch RequestError.codexLoginRequired {
             _ = FDIO.writeAll(fd, Array(Self.codexLoginRequired.utf8))
             return
         }
-        guard let upstream = buildUpstreamRequest(request) else {
+        catch {
             _ = FDIO.writeAll(fd, Self.badGateway)
             return
         }
@@ -48,18 +50,24 @@ public final class Proxy {
     static let allowedPaths: Set<String> = ["/v1/messages", "/v1/messages/count_tokens", "/api/hello"]
     static let upstreamHost = "api.anthropic.com"
 
+    enum RequestError: Error { case refused, codexLoginRequired }
+
     func buildUpstreamRequest(_ request: HTTPRequest) -> URLRequest? {
+        try? prepareUpstreamRequest(request)
+    }
+
+    func prepareUpstreamRequest(_ request: HTTPRequest) throws -> URLRequest {
         if request.path.hasPrefix(Contract.codexProxyPath + "/") {
-            return buildCodexRequest(request)
+            return try buildCodexRequest(request)
         }
         let pathOnly = String(request.path.prefix { $0 != "?" })
         guard Self.allowedPaths.contains(pathOnly) else {
             Terminal.notice("proxy refused \(Self.printable(request.method)) \(Self.printable(request.path))")
-            return nil
+            throw RequestError.refused
         }
         guard let injection = credentials.resolveAnthropic(),
               let url = Self.pinnedURL(host: Self.upstreamHost, guestPath: request.path)
-        else { return nil }
+        else { throw RequestError.refused }
 
         var headers = Self.stripCredentialHeaders(request.headers)
         // URLSession owns these; forwarding the guest's copies corrupts framing and routing.
@@ -82,12 +90,13 @@ public final class Proxy {
     }
 
     /// Exact method/path pairs only: the guest cannot use host auth on other APIs.
-    func buildCodexRequest(_ request: HTTPRequest) -> URLRequest? {
+    func buildCodexRequest(_ request: HTTPRequest) throws -> URLRequest {
         let path = String(request.path.dropFirst(Contract.codexProxyPath.count))
         let pathOnly = String(path.prefix { $0 != "?" })
         guard (request.method == "POST" && ["/responses", "/responses/compact"].contains(pathOnly))
-            || (request.method == "GET" && pathOnly == "/models") else { return nil }
-        guard let login = codex.resolve() else { return nil }
+            || (request.method == "GET" && pathOnly == "/models") else { throw RequestError.refused }
+        guard Self.pinnedURL(host: "api.openai.com", guestPath: path) != nil else { throw RequestError.refused }
+        guard let login = codex.resolve() else { throw RequestError.codexLoginRequired }
         var headers = Self.stripCredentialHeaders(request.headers)
         for managed in ["host", "content-length", "connection", "accept-encoding", "chatgpt-account-id",
                         "openai-organization", "openai-project", "cookie", "proxy-authorization"] {
@@ -106,7 +115,7 @@ public final class Proxy {
             if let accountID, !accountID.isEmpty { headers["chatgpt-account-id"] = accountID }
             headers["originator"] = "codex_cli_rs"
         }
-        guard let url = Self.pinnedURL(host: host, guestPath: upstreamPath) else { return nil }
+        guard let url = Self.pinnedURL(host: host, guestPath: upstreamPath) else { throw RequestError.refused }
         headers["authorization"] = "Bearer \(bearer)"
         var upstream = URLRequest(url: url)
         upstream.httpMethod = request.method

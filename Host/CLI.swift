@@ -77,7 +77,7 @@ public enum CLI {
 
     enum HostDirRisk: Equatable { case refuse(String), warn(String), ask(String) }
 
-    static func hostDirRisk(_ dir: String) -> HostDirRisk {
+    static func hostDirRisk(_ dir: String, codexHomes: [URL] = CodexCredentials.protectedHomes) -> HostDirRisk {
         let here = resolvedPath(dir)
         let home = resolvedPath(FileManager.default.homeDirectoryForCurrentUser.path)
         let inside = { (root: String) in here == root || here.hasPrefix(root + "/") }
@@ -89,9 +89,11 @@ public enum CLI {
         if inside("\(home)/.sidekernel") {
             return .refuse("\(tilde(here)) is SideKernel's own state.")
         }
-        let codexHome = CodexCredentials.hostHome.path
-        if here == codexHome || here.hasPrefix(codexHome + "/")
-            || (here != home && codexHome.hasPrefix(here + "/")) {
+        if codexHomes.contains(where: { url in
+            let codexHome = url.resolvingSymlinksInPath().path
+            return here == codexHome || here.hasPrefix(codexHome + "/")
+                || (here != home && codexHome.hasPrefix(here + "/"))
+        }) {
             return .refuse("this folder would expose your host Codex credentials.")
         }
         if here == home {

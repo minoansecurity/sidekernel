@@ -16,10 +16,11 @@ mkdir -p "$CODEX_HOME"
 guidance="${SK_ROOT:-}/run/sk-seed/codex/AGENTS.md"
 [ ! -r "$guidance" ] || cp -f "$guidance" "$CODEX_HOME/AGENTS.md"
 
-exec /usr/local/bin/codex "$@" \
+exec /usr/local/bin/codex \
     -c 'model_provider="sidekernel"' \
     -c 'model_providers.sidekernel.name="SideKernel host proxy"' \
     -c 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"' \
     -c 'model_providers.sidekernel.wire_api="responses"' \
     -c 'model_providers.sidekernel.requires_openai_auth=false' \
-    -c 'model_providers.sidekernel.supports_websockets=false'
+    -c 'model_providers.sidekernel.supports_websockets=false' \
+    "$@"

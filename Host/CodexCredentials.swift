@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -12,14 +13,27 @@ final class CodexCredentials: @unchecked Sendable {
     struct Stored {
         let data: Data
         let save: (Data) -> Bool
+        let refreshLockURL: URL?
+
+        init(data: Data, save: @escaping (Data) -> Bool, refreshLockURL: URL? = nil) {
+            self.data = data
+            self.save = save
+            self.refreshLockURL = refreshLockURL
+        }
+    }
+
+    static var defaultHome: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex")
+            .resolvingSymlinksInPath()
     }
 
     static var hostHome: URL {
         let configured = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? ""
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return (configured.isEmpty ? home.appending(path: ".codex") : URL(fileURLWithPath: configured))
+        return (configured.isEmpty ? defaultHome : URL(fileURLWithPath: configured))
             .resolvingSymlinksInPath()
     }
+
+    static var protectedHomes: [URL] { [defaultHome, hostHome] }
 
     static let keychainService = "Codex Auth"
     static func keychainAccount(home: URL) -> String {
@@ -53,34 +67,62 @@ final class CodexCredentials: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if let key = environmentKey() { return .apiKey(key) }
-        guard let stored = load() else {
+        let stored = load()
+        guard let login = accept(stored), let stored else { return nil }
+        guard refreshToken(for: login, data: cached ?? stored.data, at: now) != nil else { return login }
+        if let lastFailure, now.timeIntervalSince(lastFailure) < 30 { return login }
+
+        // Each VM has its own host process. Hold a stable, separate lock inode across
+        // the reload, network request and write-back, even when auth.json is renamed.
+        var lockFD: Int32 = -1
+        if let url = stored.refreshLockURL {
+            lockFD = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            guard lockFD >= 0 else { return nil }
+            guard flock(lockFD, LOCK_EX) == 0 else { close(lockFD); return nil }
+        }
+        defer { if lockFD >= 0 { flock(lockFD, LOCK_UN); close(lockFD) } }
+
+        // Another process may have refreshed or logged out while this one waited.
+        let current = load()
+        guard let login = accept(current), let current else { return nil }
+        let data = cached ?? current.data
+        guard let refreshToken = refreshToken(for: login, data: data, at: now) else { return login }
+        guard let response = refresh(refreshToken),
+              let rotated = Self.rotatedBlob(data, response: response, at: now),
+              let fresh = Self.decode(rotated) else {
+            lastFailure = now
+            // Native host Codex does not use our lock and may have consumed the token.
+            return accept(load())
+        }
+        consumed = current.data
+        cached = rotated
+        lastFailure = nil
+        if !current.save(rotated) {
+            Terminal.notice("Codex login write-back failed; run codex login on the host before your next session")
+            // Preserve the cached rotation only if the host login is still unchanged.
+            return accept(load())
+        }
+        return fresh
+    }
+
+    private func accept(_ stored: Stored?) -> Login? {
+        guard let stored else {
             consumed = nil; cached = nil; lastFailure = nil
             return nil
         }
         if stored.data != consumed && stored.data != cached {
             consumed = stored.data; cached = nil; lastFailure = nil
         }
-        let data = cached ?? stored.data
-        guard let login = Self.decode(data) else { return nil }
+        return Self.decode(cached ?? stored.data)
+    }
+
+    private func refreshToken(for login: Login, data: Data, at now: Date) -> String? {
         guard case .chatGPT(let token, _) = login,
               Self.needsRefresh(data, token: token, at: now),
               let top = Self.object(data), let tokens = top["tokens"] as? [String: Any],
               let refreshToken = tokens["refresh_token"] as? String, !refreshToken.isEmpty
-        else { return login }
-        if let lastFailure, now.timeIntervalSince(lastFailure) < 30 { return login }
-        guard let response = refresh(refreshToken),
-              let rotated = Self.rotatedBlob(data, response: response, at: now),
-              let fresh = Self.decode(rotated) else {
-            lastFailure = now
-            return login
-        }
-        consumed = stored.data
-        cached = rotated
-        lastFailure = nil
-        if !stored.save(rotated) {
-            Terminal.notice("Codex login write-back failed; run codex login on the host before your next session")
-        }
-        return fresh
+        else { return nil }
+        return refreshToken
     }
 
     private func environmentKey() -> String? {
@@ -147,6 +189,7 @@ final class CodexCredentials: @unchecked Sendable {
 
     /// Use file storage by default, as Codex does; keyring/auto select its direct Keychain item.
     static func loadHostLogin(home: URL = hostHome) -> Stored? {
+        let refreshLockURL = home.appending(path: ".sidekernel-refresh.lock")
         let config = (try? String(contentsOf: home.appending(path: "config.toml"), encoding: .utf8)) ?? ""
         // Only the top-level setting, before any TOML table. Never execute host config.
         let topLevel = config.components(separatedBy: .newlines).prefix { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("[") }
@@ -169,7 +212,7 @@ final class CodexCredentials: @unchecked Sendable {
                     guard SecItemCopyMatching(read as CFDictionary, &current) == errSecSuccess,
                           current as? Data == data else { return false }
                     return SecItemUpdate(query as CFDictionary, [kSecValueData as String: blob] as CFDictionary) == errSecSuccess
-                })
+                }, refreshLockURL: refreshLockURL)
             }
             if mode == "keyring" { return nil }
         }
@@ -189,7 +232,7 @@ final class CodexCredentials: @unchecked Sendable {
                 return rename(staged.path, file.path) == 0
             }
             catch { return false }
-        })
+        }, refreshLockURL: refreshLockURL)
     }
 
     private static func requestRefresh(_ token: String) -> Data? {

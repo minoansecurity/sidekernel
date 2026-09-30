@@ -305,10 +305,16 @@ private final class ServiceAcceptDelegate: NSObject, VZVirtioSocketListenerDeleg
 /// files are not shared, /workspace itself takes no new entries, and new folders need a new sk.
 enum HomeShare {
     static var hidden: Set<String> {
+        hidden(codexHomes: CodexCredentials.protectedHomes)
+    }
+
+    static func hidden(codexHomes: [URL]) -> Set<String> {
         var names: Set<String> = [".sidekernel", ".codex"]
-        let codexHome = CodexCredentials.hostHome.path
-        if codexHome.hasPrefix(home + "/") {
-            names.insert(String(codexHome.dropFirst(home.count + 1).prefix { $0 != "/" }))
+        for url in codexHomes {
+            let codexHome = url.resolvingSymlinksInPath().path
+            if codexHome.hasPrefix(home + "/") {
+                names.insert(String(codexHome.dropFirst(home.count + 1).prefix { $0 != "/" }))
+            }
         }
         return names
     }

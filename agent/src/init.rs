@@ -49,10 +49,10 @@ fn boot_overlay() -> Result<(), String> {
     mount_project_shares();
     mount_staging();
 
-    if matches!(personal, Personal::Degraded) || (matches!(personal, Personal::Stacked) && !personal_view) {
-        if fs::write(contract::DEGRADED_MARKER, "personal layer unavailable this boot; save is disabled\n").is_err() {
-            eprintln!("sk-agent: could not write {}", contract::DEGRADED_MARKER);
-        }
+    if (matches!(personal, Personal::Degraded) || (matches!(personal, Personal::Stacked) && !personal_view))
+        && fs::write(contract::DEGRADED_MARKER, "personal layer unavailable this boot; save is disabled\n").is_err()
+    {
+        eprintln!("sk-agent: could not write {}", contract::DEGRADED_MARKER);
     }
     configure_identity();
     Ok(())
