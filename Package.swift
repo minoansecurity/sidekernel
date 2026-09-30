@@ -18,8 +18,10 @@ let package = Package(
                 .copy("Resources/seed"),
                 .copy("Resources/bashrc"),
                 .copy("Resources/clip"),
+                .copy("Resources/codex"),
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(name: "HostTests", dependencies: ["Host"], path: "Tests/HostTests"),
     ]
 )

@@ -1,0 +1,25 @@
+#!/bin/sh
+# The CLI lives in /usr/local/bin; this wrapper routes inference through the host.
+# No host auth.json, token or API key is needed in the guest.
+set -eu
+
+case "${1:-}" in
+    login|logout)
+        printf '%s\n' 'Codex authentication is managed on the host. Run codex login or codex logout on your Mac.' >&2
+        exit 1
+        ;;
+esac
+
+[ -x /usr/local/bin/codex ] || exit 127
+export CODEX_HOME="${CODEX_HOME:-/run/sk-project/codex}"
+mkdir -p "$CODEX_HOME"
+guidance="${SK_ROOT:-}/run/sk-seed/codex/AGENTS.md"
+[ ! -r "$guidance" ] || cp -f "$guidance" "$CODEX_HOME/AGENTS.md"
+
+exec /usr/local/bin/codex "$@" \
+    -c 'model_provider="sidekernel"' \
+    -c 'model_providers.sidekernel.name="SideKernel host proxy"' \
+    -c 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"' \
+    -c 'model_providers.sidekernel.wire_api="responses"' \
+    -c 'model_providers.sidekernel.requires_openai_auth=false' \
+    -c 'model_providers.sidekernel.supports_websockets=false'

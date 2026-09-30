@@ -300,11 +300,18 @@ private final class ServiceAcceptDelegate: NSObject, VZVirtioSocketListenerDeleg
     }
 }
 
-/// With ~ as the folder, /workspace is every top-level folder of ~ except SideKernel's own state.
+/// With ~ as the folder, /workspace excludes SideKernel state and host Codex credentials.
 /// One VirtioFS share cannot leave a subfolder out, so ~ is shared folder by folder: top-level
 /// files are not shared, /workspace itself takes no new entries, and new folders need a new sk.
 enum HomeShare {
-    static let hidden: Set<String> = [".sidekernel"]
+    static var hidden: Set<String> {
+        var names: Set<String> = [".sidekernel", ".codex"]
+        let codexHome = CodexCredentials.hostHome.path
+        if codexHome.hasPrefix(home + "/") {
+            names.insert(String(codexHome.dropFirst(home.count + 1).prefix { $0 != "/" }))
+        }
+        return names
+    }
 
     static var home: String {
         FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path

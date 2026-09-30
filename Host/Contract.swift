@@ -36,6 +36,8 @@ public enum Contract {
     public static let projectMount = "/run/sk-project"
     public static let seedMount = "/run/sk-seed"
     public static let guestConfigDir = "/run/sk-project/claude"
+    public static let guestCodexDir = "/run/sk-project/codex"
+    public static let codexProxyPath = "/codex"
     public static let credentialFile = "/run/sk-project/claude/.credentials.json"
 
     /// The proxy swaps this for the real key, so the guest never holds one.

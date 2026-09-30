@@ -39,6 +39,10 @@ public struct Provisioning {
         static let gpgKeyFingerprint = "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
     }
 
+    enum Codex {
+        static let version = "0.159.2"
+    }
+
     private let root: URL
     private var images: URL { root.appending(path: "images") }
     private var logs: URL { root.appending(path: "logs") }
@@ -229,7 +233,7 @@ public struct Provisioning {
     /// PID 1 moves this tree to /run/sidekernel; only bin/ is on PATH.
     private static let guestTools = [("save", "bin"), ("sk-drop", "bin"), ("sk-net", "bin"),
                                      ("ramblinwreck", "bin"), ("clip", "libexec"), ("seed", "libexec"),
-                                     ("bashrc", "")]
+                                     ("codex", "bin"), ("bashrc", "")]
     private static let guestAliases = ["fightsong": "ramblinwreck", "xclip": "../libexec/clip",
                                        "wl-paste": "../libexec/clip", "wl-copy": "../libexec/clip",
                                        "pbcopy": "../libexec/clip"]
@@ -370,6 +374,8 @@ public struct Provisioning {
           rm -rf /var/lib/apt/lists/*
         '
         rm -f /mnt/rootfs/etc/dpkg/dpkg.cfg.d/sk-build
+        # Installed in the isolated builder: no host config or credentials are present.
+        chroot /mnt/rootfs npm install -g @openai/codex@\(Codex.version)
         # Only this build's packages are kept for the next one, and none stay in the image.
         rm -f debs/*.deb
         cp /mnt/rootfs/var/cache/apt/archives/*.deb debs/ 2>/dev/null || true

@@ -56,7 +56,7 @@ public enum CLI {
 
     /// The current folder becomes /workspace, which the agent may read, edit or delete.
     /// Every new folder gets a casual ask, remembered on yes; ~, secrets and system folders
-    /// warn every time. Only what contains ~ or lives in ~/.sidekernel is refused.
+    /// warn every time. Folders exposing host Codex credentials or SideKernel state are refused.
     static func checkHostDir(_ dir: String = FileManager.default.currentDirectoryPath) throws {
         switch hostDirRisk(dir) {
         case .refuse(let why):
@@ -89,8 +89,13 @@ public enum CLI {
         if inside("\(home)/.sidekernel") {
             return .refuse("\(tilde(here)) is SideKernel's own state.")
         }
+        let codexHome = CodexCredentials.hostHome.path
+        if here == codexHome || here.hasPrefix(codexHome + "/")
+            || (here != home && codexHome.hasPrefix(here + "/")) {
+            return .refuse("this folder would expose your host Codex credentials.")
+        }
         if here == home {
-            return .warn("~ is your whole home folder (~/.sidekernel stays hidden).")
+            return .warn("~ is your whole home folder (SideKernel state and Codex credentials stay hidden).")
         }
         // Secrets and the system, at any depth.
         let secret = [".ssh", ".gnupg", ".aws", ".kube", ".docker", "Library"].map { "\(home)/\($0)" }
@@ -198,6 +203,7 @@ public enum CLI {
         let base = fm.fileExists(atPath: root.appending(path: "images/sidekernel-base.img").path)
         let personal = PersonalStore(directory: root).currentImage() != nil
         let login = Credentials().hasAnthropicCredential()
+        let codexLogin = CodexCredentials().hasCredential()
         // Two installs (say `make install` in ~/.local/bin and Homebrew): the first on PATH wins.
         let dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
         let installs = (["sidekernel", "sk"] + Agent.table.map(\.argv0)).flatMap { name in
@@ -220,6 +226,7 @@ public enum CLI {
         \(line(true, "personal layer: \(personal ? "present" : "none yet (`save` inside a sandbox creates it)")"))
         \(line(installsOK, installsOK ? "one install on PATH" : "installed more than once, the first on PATH wins: \(targets.sorted().joined(separator: ", "))"))
         \(line(true, "Claude login: \(login ? "in Keychain (read-only check)" : "none (/login on the host or inside a sandbox)")"))
+        \(line(true, "Codex login: \(codexLogin ? "available on the host (read-only check)" : "none (run codex login on the host)" )"))
         """)
         return machineOK ? 0 : 1
     }
@@ -273,8 +280,9 @@ public enum CLI {
       sidekernel saved      what `save` kept in your personal layer
 
       sclaude [args…]       Claude Code in this directory's sandbox (args pass through)
+      scodex [args…]        Codex in this directory's sandbox (args pass through)
 
-    SK_NO_NETWORK=1 boots pinned: no internet/LAN, Claude API keeps working.
+    SK_NO_NETWORK=1 boots pinned: no internet/LAN, agent APIs keep working.
     Inside a sandbox: save · sk-drop <host path> · sk-net on|off|status
     """
 }
@@ -310,6 +318,9 @@ struct Agent {
               seedScript: "[ -e \"$HOME/.claude.json\" ] || printf '%s' "
                   + "'\(Onboarding.firstRunStateJSON)' > \"$HOME/.claude.json\"",
               autoProvision: true),
+        Agent(argv0: "scodex", name: "Codex", binary: "codex",
+              installScript: "npm install -g @openai/codex@\(Provisioning.Codex.version)",
+              homeMarkers: [".codex"], seedScript: nil, autoProvision: false),
     ]
 
     static func invoked(argv0: String) -> Agent? {

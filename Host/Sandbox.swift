@@ -111,6 +111,7 @@ public struct Sandbox {
             "HISTSIZE=1000", "HISTFILESIZE=2000", "HISTCONTROL=ignoredups:erasedups",
             "LS_COLORS=di=38;2;0;190;218:ln=38;2;160;100;210:ex=38;2;72;209;176",
             "CLAUDE_CONFIG_DIR=\(Contract.guestConfigDir)",
+            "CODEX_HOME=\(Contract.guestCodexDir)",
             // The fullscreen renderer scrolls on mouse events, which the output filter strips.
             "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1",
             // Claude Code's /copy runs wl-copy only when this is set; otherwise it falls back to OSC 52,
@@ -310,6 +311,10 @@ enum Onboarding {
         // Applied only where the guest has none yet.
         try firstRunStateJSON.write(to: claudeSeed.appending(path: ".claude.json"), atomically: true, encoding: .utf8)
         let hostClaudeDir = hostClaudeConfigDir()
+        let codexSeed = seedDir.appending(path: "codex")
+        try fm.createDirectory(at: codexSeed, withIntermediateDirectories: true)
+        try sandboxGuidance.write(to: codexSeed.appending(path: "AGENTS.md"), atomically: true, encoding: .utf8)
+
         copyHostConfigs(from: hostClaudeDir, into: claudeSeed)
         try fingerprint(of: hostClaudeDir).write(to: claudeSeed.appending(path: "seed.fp"),
                                                  atomically: true, encoding: .utf8)
@@ -412,6 +417,6 @@ enum Onboarding {
 
     The failure mode to avoid: seeing a macOS path, running `ls`, getting "No such file", and then narrating why it's inaccessible. That is wrong. A macOS path means sk-drop, immediately.
 
-    Network kill switch: `sk-net status` shows this sandbox's internet posture, `sk-net off` cuts all internet/LAN access instantly (Claude API calls keep working), and `sk-net on` asks the human on the host. Approval happens there and you cannot grant it yourself. If network commands (curl, apt, pip, git fetch) fail or hang while the network is off, that is the kill switch, not a bug: say so, and run `sk-net on` only when the user wants the network back, once, then let the host prompt decide. Never retry after a deny.
+    Network kill switch: `sk-net status` shows this sandbox's internet posture, `sk-net off` cuts all internet/LAN access instantly (Claude and Codex API calls keep working), and `sk-net on` asks the human on the host. Approval happens there and you cannot grant it yourself. If network commands (curl, apt, pip, git fetch) fail or hang while the network is off, that is the kill switch, not a bug: say so, and run `sk-net on` only when the user wants the network back, once, then let the host prompt decide. Never retry after a deny.
     """
 }
