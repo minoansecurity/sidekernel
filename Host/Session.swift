@@ -60,7 +60,7 @@ public final class Session {
                 outputDone.signal()
             }.start()
         }
-        // Quiet provisioning must not consume a piped prompt intended for the later agent run.
+        // Quiet provisioning must not consume a piped prompt intended for the later harness run.
         // Each pump owns its socket, so session teardown cannot recycle an fd beneath it.
         if forwardInput {
             let grant = grant
@@ -78,7 +78,7 @@ public final class Session {
         defer {
             winch?.cancel()
             if clean {
-                // Exit raced the last stdout bytes: drain, bounded so a wedged agent cannot hang us.
+                // Exit raced the last output bytes: drain, bounded so a wedged guest agent cannot hang us.
                 fds.dropFirst().forEach { FDIO.setReadTimeout($0, seconds: 5) }
             } else {
                 fds.dropFirst().forEach { shutdown($0, Int32(SHUT_RDWR)) }

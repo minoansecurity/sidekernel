@@ -71,7 +71,7 @@ fn listener_port(line: &str) -> Option<u16> {
     u16::from_str_radix(local.rsplit(':').next()?, 16).ok()
 }
 
-/// ANTHROPIC_BASE_URL points here.
+/// Harness inference endpoints point here; the host proxy routes and authenticates requests.
 fn relay_credentials() {
     let Ok(listener) = TcpListener::bind(("127.0.0.1", RELAY_PORT)) else {
         eprintln!("sk-agent: credential relay failed to bind 127.0.0.1:{RELAY_PORT}; API calls cannot reach the host proxy");

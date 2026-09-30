@@ -39,7 +39,7 @@ public struct Sandbox {
         defer { try? vm.stop() }
 
         let interactive = !options.quiet && isatty(STDIN_FILENO) != 0
-        // No stdin pump, so the clipboard window never opens.
+        // Only terminal input can grant a clipboard read.
         let grant = interactive ? ClipboardGrant() : nil
         let session = Session(vm: vm, grant: grant)
         let notify: @Sendable (UInt16, PortForwarder.Outcome) -> Void = { port, outcome in
@@ -72,7 +72,7 @@ public struct Sandbox {
 
         if !options.quiet {
             FileHandle.standardError.write(Data(
-                Terminal.header(hostDir: options.hostDir).utf8))
+                Terminal.header(hostDir: options.hostDir, harness: options.harness).utf8))
         }
         let controlFd = try vm.dialControl(timeout: 15)
         // An install run never touches the Keychain.
@@ -82,7 +82,7 @@ public struct Sandbox {
                                         anthropicAuthenticated: anthropicAuthenticated,
                                         hostDir: options.hostDir,
                                         hostEnv: ProcessInfo.processInfo.environment)
-        // A shell comes up before the skills and plugins are copied; a command waits for them.
+        // A shell comes up before Claude skills and plugins are copied; a command waits for them.
         let command = options.command.map { [Self.seedCommand] + $0 }
             ?? [Self.seedCommand, "--lazy"] + Self.interactiveShell
         return try session.run(controlFd: controlFd,
@@ -92,7 +92,7 @@ public struct Sandbox {
                                forwardStdin: !options.quiet)
     }
 
-    /// Merges the seed into the agent config, then execs the command.
+    /// Merges the Claude seed into its config, then execs the command.
     static let seedCommand = "/run/sidekernel/libexec/seed"
 
     /// Our rc, which sources a saved `/root/.bashrc` back.
@@ -143,6 +143,8 @@ public struct SandboxOptions {
     public var networkOn: Bool
     public var waitForNetwork: Bool
     public var quiet: Bool
+    /// Selected by the launcher; a plain shell uses only common startup tips.
+    var harness: Harness?
     /// The host's own install run: its one `save` needs no dialog, since you started it by running sk.
     public var saveApproved: Bool
     public init(hostDir: String, command: [String]?, networkOn: Bool,
@@ -284,7 +286,7 @@ private final class Services: @unchecked Sendable {
         if want, !approval.ask(
             "SideKernel: turn the network ON for the sandbox in\\n\(HostApproval.appleScriptEscape(hostDir))?\\n\\n"
                 + "This opens FULL internet and local-network access for that sandbox until you "
-                + "run sk-net off. Right now only the Claude API is reachable.") {
+                + "run sk-net off. \(Onboarding.inferenceAvailability)") {
             return Frame.ctlReply(status: .deny, message: "denied on the host", payload: [])
         }
         // Posture is updated before the reply, so a guest that saw ok never acts on a stale one.
@@ -300,9 +302,12 @@ private final class Services: @unchecked Sendable {
     }
 }
 
-/// This boot's read-only seed: user-authored Claude config, never history or secrets.
+/// This boot's read-only seed: shared sandbox guidance and user-authored Claude config.
+/// History and credentials are excluded.
 /// The host writes only here, so no guest-planted symlink can redirect a host write.
 enum Onboarding {
+    static let inferenceAvailability = "Supported inference APIs remain available through the host proxy."
+
     static func buildSeed(at seedDir: URL) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: seedDir)
@@ -406,7 +411,7 @@ enum Onboarding {
         return #"{"hasCompletedOnboarding":true,"theme":"dark","customApiKeyResponses":{"approved":["\#(approvedKey)"],"rejected":[]},"projects":{"/workspace":{"hasTrustDialogAccepted":true}}}"#
     }
 
-    /// The guest's CLAUDE.md.
+    /// Shared guidance written to Claude's CLAUDE.md and Codex's AGENTS.md.
     static let sandboxGuidance = """
     You are inside a SideKernel sandbox: a full Linux system whose only window onto the macOS host is /workspace (the current project). Everything else on the Mac (e.g. /Users/..., ~/Downloads/...) is invisible from here until it is handed in.
 
@@ -418,6 +423,6 @@ enum Onboarding {
 
     The failure mode to avoid: seeing a macOS path, running `ls`, getting "No such file", and then narrating why it's inaccessible. That is wrong. A macOS path means sk-drop, immediately.
 
-    Network kill switch: `sk-net status` shows this sandbox's internet posture, `sk-net off` cuts all internet/LAN access instantly (Claude and Codex API calls keep working), and `sk-net on` asks the human on the host. Approval happens there and you cannot grant it yourself. If network commands (curl, apt, pip, git fetch) fail or hang while the network is off, that is the kill switch, not a bug: say so, and run `sk-net on` only when the user wants the network back, once, then let the host prompt decide. Never retry after a deny.
+    Network kill switch: `sk-net status` shows this sandbox's internet posture, and `sk-net off` cuts all internet/LAN access instantly. \(inferenceAvailability) `sk-net on` asks the human on the host. Approval happens there and you cannot grant it yourself. If network commands (curl, apt, pip, git fetch) fail or hang while the network is off, that is the kill switch, not a bug: say so, and run `sk-net on` only when the user wants the network back, once, then let the host prompt decide. Never retry after a deny.
     """
 }

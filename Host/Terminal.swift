@@ -47,7 +47,7 @@ public enum Terminal {
 
     // MARK: - Header
 
-    public static func header(hostDir: String) -> String {
+    static func header(hostDir: String, harness: Harness? = nil) -> String {
         let commands = [
             ("sk-drop <path>", "import a host file or folder"),
             ("sk-net on|off", "switch network access"),
@@ -70,6 +70,7 @@ public enum Terminal {
                          "\(accent)\(command)\(reset)\(pad)  \(dim)\(description)\(reset)"))
         }
         rows.append(("", ""))
+        let tips = commonTips + (harness?.tips ?? [])
         let tip = "  \(bold)did you know?\(reset) \(dim)\(tips.randomElement() ?? "")\(reset)"
 
         let inner = (rows.map { $0.0.count }.max() ?? 0) + 6
@@ -87,20 +88,13 @@ public enum Terminal {
         return "\n" + ([top] + lines + [bottom, "", tip]).joined(separator: "\n") + "\n\n"
     }
 
-    /// One is shown at every launch.
-    static let tips = [
-        "you can drag and drop host files into Claude",
-        "you can paste images into Claude with Ctrl+V",
+    /// Available for shell launches and every harness; each harness adds its own tips.
+    static let commonTips = [
         "pbcopy works inside SideKernel",
         "typing 'ramblinwreck' prints Georgia Tech's fight song.",
         "George P. Burdell endorosed SideKernel as the 'best sandbox in the market'.",
-        "sclaude on the Mac starts Claude in a sandbox",
-        "Claude keeps working after sk-net off",
-        "Claude's credentials stay on the host, and never enter the sandbox",
-        "one Claude login covers the Mac and every sandbox",
-        "your host skills and plugins come along",
+        Onboarding.inferenceAvailability,
         "every sk boots a fresh microVM",
-        "Claude remembers conversations per folder",
         "SideKernel has zero external dependencies",
     ]
 

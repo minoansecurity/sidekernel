@@ -3,11 +3,12 @@
 set -eu
 
 STATE="${SK_ROOT:-}/run/sk-net.state"
+INFERENCE_STATUS="Supported inference APIs remain available through the host proxy."
 
 [ "$#" -le 1 ] || { echo "usage: sk-net [status|on|off]" >&2; exit 1; }
 case "${1:-status}" in
     status)
-        # Display only: the posture the agent last published, else whether a default route exists.
+        # Display only: the posture the guest agent last published, else whether a default route exists.
         if [ -r "$STATE" ]; then
             state=$(cat "$STATE")
         elif awk '$1 == "eth0" && $2 == "00000000" { found = 1 } END { exit !found }' \
@@ -19,7 +20,7 @@ case "${1:-status}" in
         if [ "$state" = on ]; then
             echo "network: on (open, full internet)"
         else
-            echo "network: off (pinned, Claude and Codex API calls stay available)"
+            echo "network: off (pinned). $INFERENCE_STATUS"
         fi
         exit 0 ;;
     on)
@@ -28,7 +29,7 @@ case "${1:-status}" in
         echo "  ✓ network on (open, full internet)" ;;
     off)
         /run/sidekernel/libexec/sk-agent ctl net off
-        echo "  ✓ network off (pinned, Claude and Codex API calls stay available)" ;;
+        echo "  ✓ network off (pinned). $INFERENCE_STATUS" ;;
     *)
         echo "usage: sk-net [status|on|off]" >&2
         exit 1 ;;

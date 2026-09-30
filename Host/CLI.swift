@@ -6,8 +6,8 @@ public enum CLI {
     static let version = "0.1.3"
 
     public static func main() {
-        if let agent = Agent.invoked(argv0: CommandLine.arguments.first ?? "") {
-            exit(runAgent(agent, passthrough: Array(CommandLine.arguments.dropFirst())))
+        if let harness = Harness.invoked(argv0: CommandLine.arguments.first ?? "") {
+            exit(runHarness(harness, passthrough: Array(CommandLine.arguments.dropFirst())))
         }
         switch CommandLine.arguments.dropFirst().first {
         case nil: exit(runShell())
@@ -27,34 +27,35 @@ public enum CLI {
     static func runShell() -> Int32 {
         do {
             try checkHostDir()
-            try Agent.provisionDetected()
+            try Harness.provisionDetected()
             return try launch(command: nil)
         } catch { return fail(error) }
     }
 
-    /// On 127 (command not found), installs the agent and retries once.
-    static func runAgent(_ agent: Agent, passthrough: [String]) -> Int32 {
+    /// On 127 (command not found), installs the harness and retries once.
+    static func runHarness(_ harness: Harness, passthrough: [String]) -> Int32 {
         do {
             try checkHostDir()
-            try Agent.provisionDetected()
-            var code = try launch(command: agent.launchCommand(passthrough))
+            try Harness.provisionDetected()
+            var code = try launch(command: harness.launchCommand(passthrough), harness: harness)
             if code == 127 {
-                guard try Agent.provision(agent) == 0 else { return 1 }
-                code = try launch(command: agent.launchCommand(passthrough))
+                guard try Harness.provision(harness) == 0 else { return 1 }
+                code = try launch(command: harness.launchCommand(passthrough), harness: harness)
             }
             return code
         } catch { return fail(error) }
     }
 
-    static func launch(command: [String]?) throws -> Int32 {
-        let options = SandboxOptions(
+    static func launch(command: [String]?, harness: Harness? = nil) throws -> Int32 {
+        var options = SandboxOptions(
             hostDir: FileManager.default.currentDirectoryPath, command: command,
             networkOn: networkOn, waitForNetwork: false, quiet: false)
+        options.harness = harness
         return try Sandbox(options: options, artifacts: provisionOnce(),
                            credentials: Credentials()).run()
     }
 
-    /// The current folder becomes /workspace, which the agent may read, edit or delete.
+    /// The current folder becomes /workspace, which the harness may read, edit or delete.
     /// Every new folder gets a casual ask, remembered on yes; ~, secrets and system folders
     /// warn every time. Folders exposing host Codex credentials or SideKernel state are refused.
     static func checkHostDir(_ dir: String = FileManager.default.currentDirectoryPath) throws {
@@ -129,7 +130,7 @@ public enum CLI {
     }
 
     /// Folders you said yes to, one path per line.
-    private static let allowedFile = Agent.Paths.root.appending(path: "allowed-dirs")
+    private static let allowedFile = Harness.Paths.root.appending(path: "allowed-dirs")
 
     private static var allowedDirs: Set<String> {
         let text = (try? String(contentsOf: allowedFile, encoding: .utf8)) ?? ""
@@ -138,7 +139,7 @@ public enum CLI {
 
     private static func rememberAllowed(_ dir: String) {
         let lines = (allowedDirs.union([dir])).sorted().joined(separator: "\n") + "\n"
-        try? FileManager.default.createDirectory(at: Agent.Paths.root, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: Harness.Paths.root, withIntermediateDirectories: true)
         try? lines.write(to: allowedFile, atomically: true, encoding: .utf8)
     }
 
@@ -161,7 +162,9 @@ public enum CLI {
 
     // MARK: - Subcommands
 
-    /// argv[0] selects the agent, so every command is a symlink to this binary.
+    static var commandNames: [String] { ["sidekernel", "sk"] + Harness.table.map(\.argv0) }
+
+    /// argv[0] selects the harness, so every command is a symlink to this binary.
     static func runInstall() -> Int32 {
         let fm = FileManager.default
         let binary = (Bundle.main.executableURL
@@ -172,7 +175,7 @@ public enum CLI {
         let binDir = fm.homeDirectoryForCurrentUser.appending(path: ".local/bin")
         do {
             try fm.createDirectory(at: binDir, withIntermediateDirectories: true)
-            let names = ["sidekernel", "sk"] + Agent.table.map(\.argv0)
+            let names = commandNames
             for name in names {
                 let link = binDir.appending(path: name)
                 try? fm.removeItem(at: link)
@@ -206,24 +209,24 @@ public enum CLI {
         let personal = PersonalStore(directory: root).currentImage() != nil
         let login = Credentials().hasAnthropicCredential()
         let codexLogin = CodexCredentials().hasCredential()
-        // Two installs (say `make install` in ~/.local/bin and Homebrew): the first on PATH wins.
+        // Two installs (say ~/.local/bin and Homebrew): the first on PATH wins.
         let dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
-        let installs = (["sidekernel", "sk"] + Agent.table.map(\.argv0)).flatMap { name in
+        let installs = commandNames.flatMap { name in
             dirs.map { "\($0)/\(name)" }.filter { fm.isExecutableFile(atPath: $0) }
         }
         let targets = Set(installs.map {
             URL(fileURLWithPath: $0).resolvingSymlinksInPath().deletingLastPathComponent().path
         })
-        let missing = (["sidekernel", "sk"] + Agent.table.map(\.argv0)).filter { name in
+        let missing = commandNames.filter { name in
             !dirs.contains { fm.isExecutableFile(atPath: "\($0)/\(name)") }
         }
-        let installsOK = targets.count == 1 && missing.isEmpty
         var installStatus = targets.isEmpty ? "no install on PATH; run make install"
             : targets.count == 1 ? "one install on PATH"
             : "installed more than once, the first on PATH wins: \(targets.sorted().joined(separator: ", "))"
         if !missing.isEmpty && !targets.isEmpty {
             installStatus += "; missing commands: \(missing.joined(separator: ", ")) (run sidekernel install)"
         }
+        let installsOK = targets.count == 1 && missing.isEmpty
 
         func line(_ ok: Bool, _ text: String) -> String {
             "  \(ok ? "\(Terminal.accent)✓" : "\(Terminal.red)✗")\(Terminal.reset) \(text)"
@@ -286,14 +289,14 @@ public enum CLI {
     usage:
       sidekernel            ephemeral sandbox shell in this directory
 
-      sidekernel install    put sk + the agent commands on your PATH
+      sidekernel install    put sk + the harness commands on your PATH
       sidekernel doctor     side-effect-free health report
       sidekernel saved      what `save` kept in your personal layer
 
-      sclaude [args…]       Claude Code in this directory's sandbox (args pass through)
-      scodex [args…]        Codex in this directory's sandbox (args pass through)
+    \(Harness.table.map { "  \($0.argv0) [args…]        \($0.name) in this directory's sandbox (args pass through)" }.joined(separator: "\n"))
 
-    SK_NO_NETWORK=1 boots pinned: no internet/LAN, agent APIs keep working.
+    SK_NO_NETWORK=1 boots pinned: no internet/LAN.
+    \(Onboarding.inferenceAvailability)
     Inside a sandbox: save · sk-drop <host path> · sk-net on|off|status
     """
 }
@@ -305,14 +308,14 @@ public enum SidekernelError: Error, CustomStringConvertible {
         switch self {
         case .provisioning(let m): return m
         case .vm(let m): return m
-        case .agentProtocol(let m): return "agent protocol: \(m)"
+        case .agentProtocol(let m): return "guest agent protocol: \(m)"
         case .timeout(let m): return "timed out: \(m)"
         case .unsafeDir(let m): return m
         }
     }
 }
 
-struct Agent {
+struct Harness {
     let argv0: String
     let name: String
     let binary: String
@@ -320,21 +323,33 @@ struct Agent {
     let homeMarkers: [String]
     let seedScript: String?
     let autoProvision: Bool
+    var tips: [String] = []
 
-    static let table: [Agent] = [
-        Agent(argv0: "sclaude", name: "Claude Code", binary: "claude",
+    static let table: [Harness] = [
+        Harness(argv0: "sclaude", name: "Claude Code", binary: "claude",
               installScript: "{ apt-get update || { rm -rf /var/lib/apt/lists/* && apt-get update; }; } || true; "
                   + "DEBIAN_FRONTEND=noninteractive apt-get install -y claude-code",
               homeMarkers: [".claude.json", ".claude"],
               seedScript: "[ -e \"$HOME/.claude.json\" ] || printf '%s' "
                   + "'\(Onboarding.firstRunStateJSON)' > \"$HOME/.claude.json\"",
-              autoProvision: true),
-        Agent(argv0: "scodex", name: "Codex", binary: "codex",
+              autoProvision: true, tips: [
+                  "you can drag and drop host files into Claude Code",
+                  "you can paste images into Claude Code with Ctrl+V",
+                  "sclaude on the Mac starts Claude Code in a sandbox",
+                  "Claude Code uses your host login through the inference proxy",
+                  "your host Claude skills and plugins come along",
+                  "Claude Code remembers conversations per folder",
+              ]),
+        Harness(argv0: "scodex", name: "Codex", binary: "codex",
               installScript: "npm install -g @openai/codex@\(Provisioning.Codex.version)",
-              homeMarkers: [".codex"], seedScript: nil, autoProvision: false),
+              homeMarkers: [".codex"], seedScript: nil, autoProvision: false, tips: [
+                  "scodex on the Mac starts Codex in a sandbox",
+                  "Codex uses your host login through the inference proxy",
+                  "Codex history and settings persist separately for each project",
+              ]),
     ]
 
-    static func invoked(argv0: String) -> Agent? {
+    static func invoked(argv0: String) -> Harness? {
         let name = (argv0 as NSString).lastPathComponent
         return table.first { $0.argv0 == name }
     }
@@ -354,10 +369,10 @@ struct Agent {
 
     static func provisionDetected() throws {
         guard CLI.networkOn, canBootVM else { return }
-        for agent in table where agent.autoProvision {
-            guard !FileManager.default.fileExists(atPath: agent.provisionMarker.path),
-                  agent.isOnHost(), retryDue(after: agent.lastFailure) else { continue }
-            try provision(agent)
+        for harness in table where harness.autoProvision {
+            guard !FileManager.default.fileExists(atPath: harness.provisionMarker.path),
+                  harness.isOnHost(), retryDue(after: harness.lastFailure) else { continue }
+            try provision(harness)
         }
     }
 
@@ -384,42 +399,42 @@ struct Agent {
         return path.split(separator: ":").contains { fm.isExecutableFile(atPath: "\($0)/\(binary)") }
     }
 
-    /// Throws only when the base image cannot be built; that failure is not the agent's.
+    /// Throws only when the base image cannot be built; that failure is not the harness's.
     @discardableResult
-    static func provision(_ agent: Agent) throws -> Int32 {
+    static func provision(_ harness: Harness) throws -> Int32 {
         let artifacts = try CLI.provisionOnce()
-        let code = (try? runQuietly(agent, artifacts: artifacts)) ?? 1
+        let code = (try? runQuietly(harness, artifacts: artifacts)) ?? 1
         let fm = FileManager.default
-        try? fm.createDirectory(at: Paths.agents, withIntermediateDirectories: true)
-        try? fm.removeItem(at: agent.failureMarker)
+        try? fm.createDirectory(at: Paths.provisioning, withIntermediateDirectories: true)
+        try? fm.removeItem(at: harness.failureMarker)
         if code == 0 {
-            fm.createFile(atPath: agent.provisionMarker.path, contents: nil)
+            fm.createFile(atPath: harness.provisionMarker.path, contents: nil)
         } else {
-            fm.createFile(atPath: agent.failureMarker.path, contents: nil)
+            fm.createFile(atPath: harness.failureMarker.path, contents: nil)
             FileHandle.standardError.write(Data(
-                "  \(Terminal.dim)see \(agent.setupLog.path) (retried daily)\(Terminal.reset)\n".utf8))
+                "  \(Terminal.dim)see \(harness.setupLog.path) (retried daily)\(Terminal.reset)\n".utf8))
         }
         return code
     }
 
     /// A throwaway workspace, so install scripts see none of your files.
-    private static func runQuietly(_ agent: Agent, artifacts: Artifacts) throws -> Int32 {
+    private static func runQuietly(_ harness: Harness, artifacts: Artifacts) throws -> Int32 {
         let fm = FileManager.default
         try fm.createDirectory(at: Paths.logs, withIntermediateDirectories: true)
-        let scratch = Paths.run.appending(path: "provision-\(agent.binary)-\(getpid())")
+        let scratch = Paths.run.appending(path: "provision-\(harness.binary)-\(getpid())")
         try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: scratch) }
-        var script = agent.installScript
-        if let seed = agent.seedScript { script += " && (\(seed))" }
+        var script = harness.installScript
+        if let seed = harness.seedScript { script += " && (\(seed))" }
         script += " && save"
         let options = SandboxOptions(hostDir: scratch.path,
                                      command: ["/bin/sh", "-c", script],
                                      networkOn: true, waitForNetwork: true, quiet: true, saveApproved: true)
         let steps = Terminal.Steps()
-        steps.start("Provisioning \(agent.name) inside the microVM")
+        steps.start("Provisioning \(harness.name) inside the microVM")
         var code: Int32 = 1
         defer { steps.finish(ok: code == 0) }
-        code = try redirectingStdout(to: agent.setupLog) {
+        code = try redirectingStdout(to: harness.setupLog) {
             try Sandbox(options: options, artifacts: artifacts, credentials: Credentials()).run()
         }
         return code
@@ -436,8 +451,8 @@ struct Agent {
         return try body()
     }
 
-    var provisionMarker: URL { Paths.agents.appending(path: "\(binary).provisioned") }
-    var failureMarker: URL { Paths.agents.appending(path: "\(binary).failed") }
+    var provisionMarker: URL { Paths.provisioning.appending(path: "\(binary).provisioned") }
+    var failureMarker: URL { Paths.provisioning.appending(path: "\(binary).failed") }
     var setupLog: URL { Paths.logs.appending(path: "setup-\(binary).log") }
     var lastFailure: Date? {
         (try? FileManager.default.attributesOfItem(atPath: failureMarker.path))?[.modificationDate] as? Date
@@ -445,7 +460,8 @@ struct Agent {
 
     enum Paths {
         static let root = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".sidekernel")
-        static let agents = root.appending(path: "agents")
+        // Keep the existing on-disk directory so provisioning markers survive upgrades.
+        static let provisioning = root.appending(path: "agents")
         static let logs = root.appending(path: "logs")
         static let run = root.appending(path: "run")
     }

@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-/// Links a folder to its agent config by an ID in an xattr, which survives renames and
+/// Links a folder to its harness configs by an ID in an xattr, which survives renames and
 /// moves on the same disk without writing inside the folder.
 enum ProjectIdentity {
     /// `#P` tells macOS never to copy it, so a copied folder starts its own project.

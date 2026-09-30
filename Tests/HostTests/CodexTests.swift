@@ -185,9 +185,9 @@ struct CodexTests {
     }
 
     @Test func testCodexInvocationAndHomeShareExcludeCredentials() throws {
-        let agent = try #require(Agent.invoked(argv0: "/opt/homebrew/bin/scodex"))
+        let harness = try #require(Harness.invoked(argv0: "/opt/homebrew/bin/scodex"))
         let args = ["exec", "prompt with spaces; $(literal)", "--model", "test-model"]
-        #expect(agent.launchCommand(args) == ["codex"] + args)
+        #expect(harness.launchCommand(args) == ["codex"] + args)
         #expect(HomeShare.hidden.contains(".codex"))
         if case .refuse = CLI.hostDirRisk(CodexCredentials.hostHome.path) {} else {
             Issue.record("must refuse sharing host credentials")

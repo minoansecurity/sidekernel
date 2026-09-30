@@ -105,7 +105,7 @@ fn mount_staging() {
 fn mount_project_shares() {
     let flags = sys::MS_NOSUID | sys::MS_NODEV;
     if let Err(error) = mount(contract::TAG_PROJECT, contract::PROJECT_MOUNT, Some("virtiofs"), flags, None) {
-        eprintln!("sk-agent: project share failed to mount ({error}); agent config will not persist");
+        eprintln!("sk-agent: project share failed to mount ({error}); harness configs will not persist");
     }
     if let Err(error) = mount(contract::TAG_SEED, contract::SEED_MOUNT, Some("virtiofs"), flags | sys::MS_RDONLY, None) {
         eprintln!("sk-agent: seed share failed to mount ({error}); host customizations are unavailable");
