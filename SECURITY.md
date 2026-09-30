@@ -10,4 +10,4 @@ Include what you found, how to reproduce it, and the SideKernel and macOS versio
 
 ## Known limitations
 
-Known limitations and risk acceptances are listed in the [README](README.md#limitations) and the [paper](https://sidekernel.com/sidekernel.pdf). Deliberate risk acceptances are not treated as vulnerabilities.
+Known limitations and risk acceptances are listed on [sidekernel.com](https://sidekernel.com/#limitations) and in the [report](https://sidekernel.com/sidekernel.pdf). Deliberate risk acceptances are not treated as vulnerabilities.
