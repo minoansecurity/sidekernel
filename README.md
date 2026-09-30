@@ -96,7 +96,7 @@ Found a vulnerability? Please [report it privately on GitHub](https://github.com
 
 SideKernel is mainly a research project. There are more mature sandboxes for AI coding agents under active development, with companies and many contributors behind them, that probably fit most use cases:
 
-- [nono](https://github.com/nolabs-ai/nono): uses kernel-enforces Seatbelt rather than microVMs, which can be reasonably secure for most use cases.
+- [nono](https://github.com/nolabs-ai/nono): uses kernel-enforced Seatbelt rather than microVMs, which can be reasonably secure for most use cases.
 - [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/): an established option from a reputable and respectable company - but closed-source.
 
 I like and often personally use both, but do your background work and decide for yourself!
