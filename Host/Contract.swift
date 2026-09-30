@@ -49,7 +49,7 @@ public enum Contract {
     """#.utf8)
 }
 
-public enum StdioStream: UInt8, Sendable { case stdin = 0, stdout = 1 }
+public enum StdioStream: UInt8, Sendable { case stdin = 0, stdout = 1, stderr = 2 }
 public enum CtlVerb: UInt8, Sendable { case save = 1, clip = 2, drop = 3, net = 4, copy = 5 }
 public enum CtlStatus: UInt8, Sendable { case ok = 0, deny = 1, err = 2 }
 
@@ -62,7 +62,7 @@ public enum Frame: Equatable, Sendable {
     case helloExec(networkOn: Bool)
     case helloTunnel(port: UInt16)
     case helloNetChanged(on: Bool)
-    case exec(nonce: String, workdir: String, argv: [String], env: [String], cols: UInt16, rows: UInt16)
+    case exec(nonce: String, workdir: String, argv: [String], env: [String], tty: Bool, cols: UInt16, rows: UInt16)
     case resize(cols: UInt16, rows: UInt16)
     case started
     case error(reason: String)
@@ -84,9 +84,9 @@ public enum Frame: Equatable, Sendable {
         case .helloExec(let on): e.tag(0x01); e.flag(on)
         case .helloTunnel(let port): e.tag(0x02); e.u16(port)
         case .helloNetChanged(let on): e.tag(0x03); e.flag(on)
-        case .exec(let nonce, let workdir, let argv, let env, let cols, let rows):
+        case .exec(let nonce, let workdir, let argv, let env, let tty, let cols, let rows):
             e.tag(0x05); e.str(nonce); e.str(workdir); e.list(argv); e.list(env)
-            e.u16(cols); e.u16(rows)
+            e.flag(tty); e.u16(cols); e.u16(rows)
         case .resize(let cols, let rows): e.tag(0x06); e.u16(cols); e.u16(rows)
         case .started: e.tag(0x07)
         case .error(let reason): e.tag(0x08); e.str(reason)
@@ -136,14 +136,14 @@ public enum Frame: Equatable, Sendable {
         case 0x03: frame = .helloNetChanged(on: try d.flag())
         case 0x05: frame = .exec(nonce: try d.nonce(), workdir: try d.str(),
                                  argv: try d.listMinOne(), env: try d.list(),
-                                 cols: try d.u16(), rows: try d.u16())
+                                 tty: try d.flag(), cols: try d.u16(), rows: try d.u16())
         case 0x06: frame = .resize(cols: try d.u16(), rows: try d.u16())
         case 0x07: frame = .started
         case 0x08: frame = .error(reason: try d.str())
         case 0x09: frame = .exited(code: Int32(bitPattern: try d.u32()))
         case 0x11:
             guard let which = StdioStream(rawValue: try d.u8()) else {
-                throw FrameDecodeError(reason: "which must be 0 or 1")
+                throw FrameDecodeError(reason: "which must be 0, 1 or 2")
             }
             frame = .helloStdio(which: which, nonce: try d.nonce())
         case 0x12: frame = .helloPortEvents

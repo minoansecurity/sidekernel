@@ -19,7 +19,7 @@ case "${1:-status}" in
         if [ "$state" = on ]; then
             echo "network: on (open, full internet)"
         else
-            echo "network: off (pinned, the Claude API lane stays available)"
+            echo "network: off (pinned, Claude and Codex API calls stay available)"
         fi
         exit 0 ;;
     on)
@@ -28,7 +28,7 @@ case "${1:-status}" in
         echo "  ✓ network on (open, full internet)" ;;
     off)
         /run/sidekernel/libexec/sk-agent ctl net off
-        echo "  ✓ network off (pinned, the Claude API lane stays available)" ;;
+        echo "  ✓ network off (pinned, Claude and Codex API calls stay available)" ;;
     *)
         echo "usage: sk-net [status|on|off]" >&2
         exit 1 ;;

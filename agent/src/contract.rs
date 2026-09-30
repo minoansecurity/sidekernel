@@ -39,7 +39,7 @@ pub const CREDENTIAL_FILE: &str = "/run/sk-project/claude/.credentials.json";
 pub const PLACEHOLDER_BLOB: &str = r#"{"claudeAiOauth":{"accessToken":"sk-sidekernel-proxy-placeholder","refreshToken":"sk-sidekernel-proxy-placeholder","expiresAt":4102444800000,"scopes":["user:inference","user:profile"]}}"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StdioStream { Stdin = 0, Stdout = 1 }
+pub enum StdioStream { Stdin = 0, Stdout = 1, Stderr = 2 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CtlVerb { Save = 1, Clip = 2, Drop = 3, Net = 4, Copy = 5 }
@@ -52,7 +52,7 @@ pub enum Frame {
     HelloExec { network_on: bool },
     HelloTunnel { port: u16 },
     HelloNetChanged { on: bool },
-    Exec { nonce: String, workdir: String, argv: Vec<String>, env: Vec<String>, cols: u16, rows: u16 },
+    Exec { nonce: String, workdir: String, argv: Vec<String>, env: Vec<String>, tty: bool, cols: u16, rows: u16 },
     Resize { cols: u16, rows: u16 },
     Started,
     Error { reason: String },
@@ -79,9 +79,9 @@ impl Frame {
             Frame::HelloExec { network_on } => { e.tag(0x01); e.flag(*network_on); }
             Frame::HelloTunnel { port } => { e.tag(0x02); e.u16(*port); }
             Frame::HelloNetChanged { on } => { e.tag(0x03); e.flag(*on); }
-            Frame::Exec { nonce, workdir, argv, env, cols, rows } => {
+            Frame::Exec { nonce, workdir, argv, env, tty, cols, rows } => {
                 e.tag(0x05); e.str(nonce); e.str(workdir);
-                e.list(argv); e.list(env); e.u16(*cols); e.u16(*rows);
+                e.list(argv); e.list(env); e.flag(*tty); e.u16(*cols); e.u16(*rows);
             }
             Frame::Resize { cols, rows } => { e.tag(0x06); e.u16(*cols); e.u16(*rows); }
             Frame::Started => e.tag(0x07),
@@ -132,7 +132,7 @@ impl Frame {
             0x05 => Frame::Exec {
                 nonce: d.nonce()?, workdir: d.str()?,
                 argv: d.list_min_one()?, env: d.list()?,
-                cols: d.u16()?, rows: d.u16()?,
+                tty: d.flag()?, cols: d.u16()?, rows: d.u16()?,
             },
             0x06 => Frame::Resize { cols: d.u16()?, rows: d.u16()? },
             0x07 => Frame::Started,
@@ -142,7 +142,8 @@ impl Frame {
                 which: match d.u8()? {
                     0 => StdioStream::Stdin,
                     1 => StdioStream::Stdout,
-                    _ => return Err(DecodeError("which must be 0 or 1")),
+                    2 => StdioStream::Stderr,
+                    _ => return Err(DecodeError("which must be 0, 1 or 2")),
                 },
                 nonce: d.nonce()?,
             },
@@ -324,13 +325,14 @@ mod tests {
             Frame::Exec {
                 nonce: "9f3a6c0d5e8b12474455aabbccdd0011".into(), workdir: "/workspace".into(),
                 argv: vec!["/bin/sh".into(), "-c".into(), "ls".into()],
-                env: vec!["A=1".into()], cols: 203, rows: 51,
+                env: vec!["A=1".into()], tty: true, cols: 203, rows: 51,
             },
             Frame::Resize { cols: 80, rows: 24 },
             Frame::Started,
             Frame::Error { reason: "busy".into() },
             Frame::Exited { code: 130 },
             Frame::HelloStdio { which: StdioStream::Stdout, nonce: "0".repeat(32) },
+            Frame::HelloStdio { which: StdioStream::Stderr, nonce: "0".repeat(32) },
             Frame::HelloPortEvents,
             Frame::HelloProxy,
             Frame::Adopt { blob: vec![1, 2, 3] },
@@ -346,6 +348,28 @@ mod tests {
         for frame in every_variant() {
             let bytes = frame.encode();
             assert_eq!(Frame::decode(&bytes), Ok(frame.clone()), "{}", frame.name());
+        }
+    }
+
+    #[test]
+    fn exec_wire_distinguishes_terminal_and_byte_streams() {
+        for tty in [true, false] {
+            let frame = Frame::Exec {
+                nonce: "0".repeat(32), workdir: "/workspace".into(), argv: vec!["cat".into()],
+                env: vec![], tty, cols: 80, rows: 24,
+            };
+            let mut expected = vec![0, 0, 0, 61, 5, 0, 32];
+            expected.extend("0".repeat(32).as_bytes());
+            expected.extend([0, 10]);
+            expected.extend(b"/workspace");
+            expected.extend([0, 1, 0, 3]);
+            expected.extend(b"cat");
+            expected.extend([0, 0, u8::from(tty), 0, 80, 0, 24]);
+            assert_eq!(frame.encode(), expected);
+            assert_eq!(Frame::decode(&expected), Ok(frame));
+            let flag = expected.len() - 5;
+            expected[flag] = 2;
+            assert!(Frame::decode(&expected).is_err());
         }
     }
 
@@ -406,7 +430,7 @@ mod tests {
         assert!(fits.try_encode().is_some());
         let many = Frame::Exec {
             nonce: "n".into(), workdir: "/".into(), argv: vec!["x".into(); u16::MAX as usize + 1],
-            env: vec![], cols: 80, rows: 24,
+            env: vec![], tty: false, cols: 80, rows: 24,
         };
         assert_eq!(many.try_encode(), None);
     }

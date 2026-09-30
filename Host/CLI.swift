@@ -214,7 +214,16 @@ public enum CLI {
         let targets = Set(installs.map {
             URL(fileURLWithPath: $0).resolvingSymlinksInPath().deletingLastPathComponent().path
         })
-        let installsOK = targets.count <= 1
+        let missing = (["sidekernel", "sk"] + Agent.table.map(\.argv0)).filter { name in
+            !dirs.contains { fm.isExecutableFile(atPath: "\($0)/\(name)") }
+        }
+        let installsOK = targets.count == 1 && missing.isEmpty
+        var installStatus = targets.isEmpty ? "no install on PATH; run make install"
+            : targets.count == 1 ? "one install on PATH"
+            : "installed more than once, the first on PATH wins: \(targets.sorted().joined(separator: ", "))"
+        if !missing.isEmpty && !targets.isEmpty {
+            installStatus += "; missing commands: \(missing.joined(separator: ", ")) (run sidekernel install)"
+        }
 
         func line(_ ok: Bool, _ text: String) -> String {
             "  \(ok ? "\(Terminal.accent)✓" : "\(Terminal.red)✗")\(Terminal.reset) \(text)"
@@ -226,7 +235,7 @@ public enum CLI {
         \(line(true, "kernel: \(kernel ? "cached" : "fetched on first run")"))
         \(line(true, "base image: \(base ? "built" : "built on first run")"))
         \(line(true, "personal layer: \(personal ? "present" : "none yet (`save` inside a sandbox creates it)")"))
-        \(line(installsOK, installsOK ? "one install on PATH" : "installed more than once, the first on PATH wins: \(targets.sorted().joined(separator: ", "))"))
+        \(line(installsOK, installStatus))
         \(line(true, "Claude login: \(login ? "in Keychain (read-only check)" : "none (/login on the host or inside a sandbox)")"))
         \(line(true, "Codex login: \(codexLogin ? "available on the host (read-only check)" : "none (run codex login on the host)" )"))
         """)

@@ -88,7 +88,8 @@ public struct Sandbox {
         return try session.run(controlFd: controlFd,
                                command: command,
                                workDir: "/workspace", env: env,
-                               networkOn: options.networkOn, tty: interactive)
+                               networkOn: options.networkOn, tty: interactive,
+                               forwardStdin: !options.quiet)
     }
 
     /// Merges the seed into the agent config, then execs the command.

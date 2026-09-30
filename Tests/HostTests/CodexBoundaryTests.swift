@@ -165,11 +165,12 @@ struct CodexBoundaryTests {
         #expect(loads == 1)
     }
 
-    @Test func wrapperPreservesArgumentDelimiterAndLiteralPrompt() throws {
+    private func runWrapper(_ args: [String], script: String = "#!/bin/sh\nprintf '%s\\0' \"$@\"\n",
+                            input: Data = Data()) throws -> (code: Int32, data: Data, error: String) {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let binary = directory.appending(path: "codex-stub")
-        try "#!/bin/sh\nprintf '%s\\0' \"$@\"\n".write(to: binary, atomically: true, encoding: .utf8)
+        try script.write(to: binary, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -178,19 +179,64 @@ struct CodexBoundaryTests {
         try source.replacingOccurrences(of: "/usr/local/bin/codex", with: binary.path)
             .write(to: wrapper, atomically: true, encoding: .utf8)
         let child = Process()
-        child.executableURL = URL(fileURLWithPath: "/bin/sh")
-        let passthrough = ["exec", "--", "prompt with spaces; $(literal)"]
-        child.arguments = [wrapper.path] + passthrough
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        child.arguments = [wrapper.path] + args
         child.environment = ["PATH": "/usr/bin:/bin", "CODEX_HOME": directory.appending(path: "config").path,
                              "SK_ROOT": directory.path]
         let output = Pipe()
+        let errors = Pipe()
+        let stdin = Pipe()
         child.standardOutput = output
+        child.standardError = errors
+        child.standardInput = stdin
         try child.run()
+        try stdin.fileHandleForWriting.write(contentsOf: input)
+        try stdin.fileHandleForWriting.close()
         let data = output.fileHandleForReading.readDataToEndOfFile()
+        let error = errors.fileHandleForReading.readDataToEndOfFile()
         child.waitUntilExit()
-        #expect(child.terminationStatus == 0)
-        let arguments = String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init)
+        return (child.terminationStatus, data, String(decoding: error, as: UTF8.self))
+    }
+
+    @Test func wrapperPreservesArgumentDelimiterAndLiteralPrompt() throws {
+        let passthrough = ["exec", "--", "prompt with spaces; $(literal)", "--config", "literal=true"]
+        let result = try runWrapper(passthrough)
+        #expect(result.code == 0)
+        let arguments = String(decoding: result.data, as: UTF8.self).split(separator: "\0").map(String.init)
         #expect(arguments.prefix(2) == ["-c", "model_provider=\"sidekernel\""])
         #expect(Array(arguments.suffix(passthrough.count)) == passthrough)
+    }
+
+    @Test func wrapperMergesConfigAcrossSubcommandsWithoutLosingProxy() throws {
+        let result = try runWrapper(["-c", "root=true", "exec", "--config=child=true",
+                                     "resume", "--last", "-cnested=true", "--disable", "shell_tool", "prompt"])
+        #expect(result.code == 0)
+        let args = String(decoding: result.data, as: UTF8.self).split(separator: "\0").map(String.init)
+        #expect(Array(args.dropFirst(12)) == ["-c", "root=true", "--config=child=true", "-cnested=true",
+                                              "--disable", "shell_tool", "exec", "resume", "--last", "prompt"])
+        #expect(args.contains("model_provider=\"sidekernel\""))
+    }
+
+    @Test func wrapperFindsHostManagedAuthAfterGlobalOptions() throws {
+        for args in [["login", "status"], ["-c", "x=true", "login", "status"],
+                     ["--model=other", "logout"], ["-m", "other", "login"],
+                     ["--no-alt-screen", "--cd", "/workspace", "logout"],
+                     ["--disable", "shell_tool", "login"]] {
+            let result = try runWrapper(args)
+            #expect(result.code == 1)
+            #expect(result.data.isEmpty, Comment(rawValue: "native login must not run"))
+            #expect(result.error.contains("authentication is managed on the host"))
+        }
+        for args in [["--", "login"], ["-m", "login", "exec", "prompt"],
+                     ["exec", "logout"], ["help", "login"]] {
+            #expect(try runWrapper(args).code == 0, Comment(rawValue: "a value or prompt is not a root auth command"))
+        }
+    }
+
+    @Test func wrapperLeavesPipedInputForCodex() throws {
+        let input = Data("prompt without a newline; $(literal)\u{0}\u{04}".utf8)
+        let result = try runWrapper(["exec", "-"], script: "#!/bin/sh\ncat\n", input: input)
+        #expect(result.code == 0)
+        #expect(result.data == input)
     }
 }

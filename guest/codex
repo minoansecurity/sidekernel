@@ -1,26 +1,76 @@
-#!/bin/sh
+#!/usr/bin/python3
 # The CLI lives in /usr/local/bin; this wrapper routes inference through the host.
 # No host auth.json, token or API key is needed in the guest.
-set -eu
+import os
+from pathlib import Path
+import shutil
+import sys
 
-case "${1:-}" in
-    login|logout)
-        printf '%s\n' 'Codex authentication is managed on the host. Run codex login or codex logout on your Mac.' >&2
-        exit 1
-        ;;
-esac
 
-[ -x /usr/local/bin/codex ] || exit 127
-export CODEX_HOME="${CODEX_HOME:-/run/sk-project/codex}"
-mkdir -p "$CODEX_HOME"
-guidance="${SK_ROOT:-}/run/sk-seed/codex/AGENTS.md"
-[ ! -r "$guidance" ] || cp -f "$guidance" "$CODEX_HOME/AGENTS.md"
+# Codex's subcommand config overrides replace its top-level override list.
+# Collect them at the top level so normal exec/resume options keep the proxy.
+# Stop at --: everything after it is literal input, including option-like words.
+args = sys.argv[1:]
+overrides = []
+passthrough = []
+index = 0
+while index < len(args):
+    arg = args[index]
+    if arg == "--":
+        passthrough.extend(args[index:])
+        break
+    if arg in ("-c", "--config", "--enable", "--disable") and index + 1 < len(args):
+        overrides.extend((arg, args[index + 1]))
+        index += 2
+        continue
+    if arg.startswith(("--config=", "--enable=", "--disable=")) or (arg.startswith("-c") and len(arg) > 2):
+        overrides.append(arg)
+    else:
+        passthrough.append(arg)
+    index += 1
 
-exec /usr/local/bin/codex \
-    -c 'model_provider="sidekernel"' \
-    -c 'model_providers.sidekernel.name="SideKernel host proxy"' \
-    -c 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"' \
-    -c 'model_providers.sidekernel.wire_api="responses"' \
-    -c 'model_providers.sidekernel.requires_openai_auth=false' \
-    -c 'model_providers.sidekernel.supports_websockets=false' \
-    "$@"
+# Find the root subcommand after global flags and their values. A prompt after
+# --, or an option value named login/logout, must stay literal.
+value_options = {
+    "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
+    "-C", "--cd", "--add-dir", "--local-provider", "--remote", "--remote-auth-token-env",
+}
+index = 0
+while index < len(passthrough):
+    arg = passthrough[index]
+    if arg == "--" or arg in ("-h", "--help", "-V", "--version"):
+        break
+    if arg in value_options:
+        index += 2
+        continue
+    if arg in ("-i", "--image"):
+        index += 1
+        while index < len(passthrough) and not passthrough[index].startswith("-"):
+            index += 1
+        continue
+    if not arg.startswith("-"):
+        if arg in ("login", "logout"):
+            print("Codex authentication is managed on the host. Run codex login or codex logout on your Mac.", file=sys.stderr)
+            sys.exit(1)
+        break
+    index += 1
+
+binary = "/usr/local/bin/codex"
+if not os.access(binary, os.X_OK):
+    sys.exit(127)
+home = Path(os.environ.get("CODEX_HOME") or "/run/sk-project/codex")
+os.environ["CODEX_HOME"] = str(home)
+home.mkdir(parents=True, exist_ok=True)
+guidance = Path(os.environ.get("SK_ROOT", "") + "/run/sk-seed/codex/AGENTS.md")
+if guidance.is_file():
+    shutil.copyfile(guidance, home / "AGENTS.md")
+
+proxy = [
+    '-c', 'model_provider="sidekernel"',
+    '-c', 'model_providers.sidekernel.name="SideKernel host proxy"',
+    '-c', 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"',
+    '-c', 'model_providers.sidekernel.wire_api="responses"',
+    '-c', 'model_providers.sidekernel.requires_openai_auth=false',
+    '-c', 'model_providers.sidekernel.supports_websockets=false',
+]
+os.execv(binary, [binary] + proxy + overrides + passthrough)

@@ -467,7 +467,7 @@ public struct Provisioning {
         _ = FDIO.writeFrame(control, .helloExec(networkOn: true))
         _ = FDIO.writeFrame(control, .exec(nonce: nonce, workdir: "/",
                                            argv: ["/bin/sh", "-c", script], env: [],
-                                           cols: 0, rows: 0))
+                                           tty: false, cols: 0, rows: 0))
         var exitCode: Int32 = -1
         loop: while true {
             switch try FDIO.readFrame(control, cap: Contract.maxControlFrame) {
@@ -495,7 +495,7 @@ public struct Provisioning {
         guard let hello = try? FDIO.readFrame(fd, cap: Contract.maxControlFrame),
               case .helloStdio(let which, let helloNonce) = hello, helloNonce == nonce
         else { close(fd); return }
-        guard which == .stdout else { held.add(fd); return }
+        guard which == .stdout || which == .stderr else { held.add(fd); return }
         FDIO.setReadTimeout(fd, seconds: 3600)
         let marker = Array("\(stepMarker) ".utf8)
         var line: [UInt8] = []

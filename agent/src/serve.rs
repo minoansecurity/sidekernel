@@ -45,9 +45,9 @@ fn dispatch(mut connection: File, exec_running: &Arc<AtomicBool>) {
 }
 
 fn exec_session(mut control: File) {
-    let Ok(Frame::Exec { nonce, workdir, argv, env, cols, rows }) =
+    let Ok(Frame::Exec { nonce, workdir, argv, env, tty, cols, rows }) =
         read_frame(&mut control, MAX_CONTROL_FRAME) else { return };
-    let mut child = match process::spawn(&workdir, &argv, &env, cols, rows) {
+    let mut child = match process::spawn(&workdir, &argv, &env, tty, cols, rows) {
         Ok(child) => child,
         Err(e) => {
             let _ = write_frame(&mut control, &Frame::Error { reason: e.to_string() });
@@ -55,7 +55,8 @@ fn exec_session(mut control: File) {
         }
     };
     let _ = write_frame(&mut control, &Frame::Started);
-    let pump = control.try_clone().ok().and_then(|clone| resize_pump(clone, child.master_fd()));
+    let pump = child.terminal_fd().and_then(|master|
+        control.try_clone().ok().and_then(|clone| resize_pump(clone, master)));
     let code = child.forward_stdio_and_wait(&nonce).unwrap_or(1);
     let _ = write_frame(&mut control, &Frame::Exited { code });
     if let Some(thread) = pump { let _ = thread.join(); }
