@@ -85,10 +85,21 @@ Most of this isn't unique to SideKernel; I'd just rather be upfront about it. Us
 - **Should you let your agents loose in SideKernel?** It's up to you.
 - **Do I think SideKernel is reasonably secure?** Yes.
 - **Can I guarantee that SideKernel is secure?** No.
+- **Are there other sandboxes worth looking at?** Yes, see [Alternatives](#alternatives).
 
 For more on the threat model and limitations, see the [practicum report](https://sidekernel.com/sidekernel.pdf), the [website](https://sidekernel.com/) and, of course, the code itself.
 
 Found a vulnerability? Please [report it privately on GitHub](https://github.com/minoansecurity/sidekernel/security/advisories/new). Reports are welcome and taken seriously, but fixes may take a little while. The project is still small and it's just me at the moment. Contributions are welcome.
+
+
+## Alternatives
+
+SideKernel is mainly a research project. There are more mature sandboxes for AI coding agents under active development, with companies and many contributors behind them, that probably fit most use cases:
+
+- [nono](https://github.com/nolabs-ai/nono): uses kernel-enforces Seatbelt rather than microVMs, which can be reasonably secure for most use cases.
+- [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/): an established option from a reputable and respectable company - but closed-source.
+
+I like and often personally use both, but do your background work and decide for yourself!
 
 ## Learn more
 
