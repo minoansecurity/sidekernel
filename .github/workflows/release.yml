@@ -26,6 +26,9 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add aarch64-unknown-linux-musl
 
+      - name: Test guest terminal adapter
+        run: python3 -B -m unittest discover -s Tests/GuestTests
+
       - name: Test and build the agent
         working-directory: agent
         run: |

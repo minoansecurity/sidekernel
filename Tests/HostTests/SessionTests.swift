@@ -4,6 +4,47 @@ import Testing
 @testable import Host
 
 struct SessionTests {
+    @Test func pastedTextCannotGrantClipboardAccess() {
+        let start = Array("\u{1B}[200~".utf8), end = Array("\u{1B}[201~".utf8)
+        let text = Array("literal \u{16} \u{1B}[118;5u \u{1B}[118;5:1u \u{1B}[27;5;118~".utf8)
+        let payload = start + text + end
+        for split in 0...payload.count {
+            let grant = ClipboardGrant()
+            grant.noteInput(payload[..<split])
+            grant.noteInput(payload[split...])
+            #expect(!grant.isLive)
+            grant.noteInput([ClipboardGrant.pasteByte][...])
+            #expect(grant.isLive)
+        }
+        let grant = ClipboardGrant()
+        for byte in payload {
+            grant.noteInput([byte][...])
+            #expect(!grant.isLive)
+        }
+    }
+
+    @Test func clipboardGrantRecognizesSplitCodexKeysWithoutExtendingOnOrdinaryInput() {
+        let keys = ["\u{16}", "\u{1B}[118;5u", "\u{1B}[118;5:1u", "\u{1B}[118;5:2u", "\u{1B}[27;5;118~"]
+        for key in keys {
+            let bytes = Array(key.utf8)
+            for split in 0...bytes.count {
+                var now = Date(timeIntervalSince1970: 100)
+                let grant = ClipboardGrant(window: 10, now: { now })
+                grant.noteInput(bytes[..<split])
+                grant.noteInput(bytes[split...])
+                #expect(grant.isLive)
+                now = now.addingTimeInterval(11)
+                grant.noteInput(Array("ordinary input".utf8)[...])
+                #expect(!grant.isLive)
+            }
+        }
+        for text in ["\u{1B}[118;5:3u", "\u{1B}[118;1u", "\u{1B}[117;5u", "\u{1B}[27;1;118~"] {
+            let grant = ClipboardGrant()
+            grant.noteInput(Array(text.utf8)[...])
+            #expect(!grant.isLive)
+        }
+    }
+
     @Test func pipedInputPreservesBytesAndHalfClosesAtEOF() throws {
         let input = Pipe()
         var sockets: [Int32] = [-1, -1]

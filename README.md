@@ -61,6 +61,10 @@ and settings persist separately for each project. Host Codex configuration is
 not copied into the sandbox. Supported host credential stores are `auth.json`
 under `CODEX_HOME` (default `~/.codex`) and the direct macOS Codex Keychain store.
 
+Paste clipboard images into interactive Codex with **Ctrl+V**. SideKernel copies
+the image into the microVM and adds it to the current prompt as an attachment.
+Clipboard image files last until the microVM shuts down.
+
 Coming soon: `sgemini`, `sgrok`, and more.
 
 **Inside the sandbox:**

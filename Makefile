@@ -49,6 +49,7 @@ identity:
 	rm -rf "$$t"; exit 1
 
 test: stage
+	python3 -B -m unittest discover -s Tests/GuestTests
 	cd agent && cargo test
 	swift test --disable-xctest $(SWIFT_TEST_FLAGS)
 
