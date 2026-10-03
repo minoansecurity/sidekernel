@@ -1,6 +1,6 @@
 //! libc declarations and kernel ABI structs.
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use std::ffi::{c_char, c_int, c_ulong, c_void};
 use std::io;
 
 pub const AF_INET: c_int = 2;
@@ -149,7 +149,7 @@ unsafe extern "C" {
     pub fn setsid() -> c_int;
     pub fn chdir(path: *const c_char) -> c_int;
     pub fn dup2(old_fd: c_int, new_fd: c_int) -> c_int;
-    pub fn open(path: *const c_char, flags: c_int, mode: c_uint) -> c_int;
+    pub fn open(path: *const c_char, flags: c_int, ...) -> c_int;
     pub fn read(fd: c_int, buf: *mut c_void, count: usize) -> isize;
     pub fn write(fd: c_int, buf: *const c_void, count: usize) -> isize;
     pub fn fcntl(fd: c_int, cmd: c_int, arg: c_int) -> c_int;

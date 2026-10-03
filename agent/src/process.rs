@@ -173,7 +173,7 @@ fn open_pty(cols: u16, rows: u16) -> io::Result<(OwnedFd, OwnedFd)> {
 }
 
 fn open_cloexec(path: &CStr) -> io::Result<OwnedFd> {
-    let fd = sys::check(unsafe { sys::open(path.as_ptr(), sys::O_RDWR | sys::O_NOCTTY | sys::O_CLOEXEC, 0) })?;
+    let fd = sys::check(unsafe { sys::open(path.as_ptr(), sys::O_RDWR | sys::O_NOCTTY | sys::O_CLOEXEC, 0u32) })?;
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
