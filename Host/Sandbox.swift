@@ -92,7 +92,7 @@ public struct Sandbox {
                                forwardStdin: !options.quiet)
     }
 
-    /// Merges the Claude seed into its config, then execs the command.
+    /// Merges the host seed into each harness config, then execs the command.
     static let seedCommand = "/run/sidekernel/libexec/seed"
 
     /// Our rc, which sources a saved `/root/.bashrc` back.
@@ -115,6 +115,8 @@ public struct Sandbox {
             "CODEX_HOME=\(Contract.guestCodexDir)",
             // The fullscreen renderer scrolls on mouse events, which the output filter strips.
             "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1",
+            // The microVM's Claude Code follows the Mac's version; it must not update itself.
+            "DISABLE_AUTOUPDATER=1",
             // Claude Code's /copy runs wl-copy only when this is set; otherwise it falls back to OSC 52,
             // which the output filter strips. Nothing listens on it; wl-copy is our clip script.
             "WAYLAND_DISPLAY=sidekernel",
