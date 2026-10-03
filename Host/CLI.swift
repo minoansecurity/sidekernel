@@ -36,10 +36,10 @@ public enum CLI {
     static func runHarness(_ harness: Harness, passthrough: [String]) -> Int32 {
         do {
             try checkHostDir()
-            try Harness.provisionDetected()
+            try Harness.provisionDetected([harness])
             var code = try launch(command: harness.launchCommand(passthrough), harness: harness)
             if code == 127 {
-                guard try Harness.provision(harness) == 0 else { return 1 }
+                guard try Harness.provision(harness, version: harness.hostVersion()) == 0 else { return 1 }
                 code = try launch(command: harness.launchCommand(passthrough), harness: harness)
             }
             return code
@@ -319,20 +319,28 @@ struct Harness {
     let argv0: String
     let name: String
     let binary: String
-    let installScript: String
+    /// Installs the given version in the microVM; nil installs a default when the Mac has none to match.
+    let installScript: @Sendable (String?) -> String
     let homeMarkers: [String]
     let seedScript: String?
-    let autoProvision: Bool
     var tips: [String] = []
 
     static let table: [Harness] = [
         Harness(argv0: "sclaude", name: "Claude Code", binary: "claude",
-              installScript: "{ apt-get update || { rm -rf /var/lib/apt/lists/* && apt-get update; }; } || true; "
-                  + "DEBIAN_FRONTEND=noninteractive apt-get install -y claude-code",
+              installScript: { version in
+                  let update = "{ apt-get update || { rm -rf /var/lib/apt/lists/* && apt-get update; }; } || true; "
+                  guard let version else {
+                      return update + "DEBIAN_FRONTEND=noninteractive apt-get install -y claude-code"
+                  }
+                  // The apt repo keeps past releases. Pick the package build of the Mac's version, e.g. 2.1.177-1.
+                  return update
+                      + "v=$(apt-cache madison claude-code | awk -v want='\(version)-' 'index($3, want) == 1 { print $3; exit }'); "
+                      + "[ -n \"$v\" ] && DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades claude-code=\"$v\""
+              },
               homeMarkers: [".claude.json", ".claude"],
               seedScript: "[ -e \"$HOME/.claude.json\" ] || printf '%s' "
                   + "'\(Onboarding.firstRunStateJSON)' > \"$HOME/.claude.json\"",
-              autoProvision: true, tips: [
+              tips: [
                   "you can drag and drop host files into Claude Code",
                   "you can paste images into Claude Code with Ctrl+V",
                   "sclaude on the Mac starts Claude Code in a sandbox",
@@ -341,8 +349,11 @@ struct Harness {
                   "Claude Code remembers conversations per folder",
               ]),
         Harness(argv0: "scodex", name: "Codex", binary: "codex",
-              installScript: "npm install -g @openai/codex@\(Provisioning.Codex.version)",
-              homeMarkers: [".codex"], seedScript: nil, autoProvision: false, tips: [
+              installScript: { version in
+                  "npm install -g @openai/codex@\(version ?? Provisioning.Codex.version)"
+              },
+              homeMarkers: [".codex"], seedScript: nil, tips: [
+                  "you can paste images into Codex with Ctrl+V",
                   "scodex on the Mac starts Codex in a sandbox",
                   "Codex uses your host login through the inference proxy",
                   "Codex history and settings persist separately for each project",
@@ -367,13 +378,31 @@ struct Harness {
 
     // MARK: - Provisioning
 
-    static func provisionDetected() throws {
+    /// Keeps each harness in the microVM at the same version as on the Mac.
+    /// After the Mac updates one, the next launch installs that version in the microVM first.
+    /// Scoped to `harnesses`: launching `scodex` syncs only Codex, never the other harnesses.
+    static func provisionDetected(_ harnesses: [Harness] = table) throws {
         guard CLI.networkOn, canBootVM else { return }
-        for harness in table where harness.autoProvision {
-            guard !FileManager.default.fileExists(atPath: harness.provisionMarker.path),
-                  harness.isOnHost(), retryDue(after: harness.lastFailure) else { continue }
-            try provision(harness)
+        for harness in harnesses where harness.isOnHost() {
+            let version = harness.hostVersion()
+            guard harness.needsInstall(matching: version), harness.retryDue(for: version) else { continue }
+            try provision(harness, version: version)
         }
+    }
+
+    /// Not installed yet, or installed at another version than the Mac's.
+    func needsInstall(matching version: String?) -> Bool {
+        guard let installed = try? String(contentsOf: provisionMarker, encoding: .utf8) else { return true }
+        guard let version else { return false }
+        return installed != version
+    }
+
+    /// A failed install is retried daily, or right away once the Mac has another version.
+    func retryDue(for version: String?) -> Bool {
+        guard let lastFailure else { return true }
+        let failedVersion = (try? String(contentsOf: failureMarker, encoding: .utf8)) ?? ""
+        if failedVersion != (version ?? "") { return true }
+        return Self.retryDue(after: lastFailure)
     }
 
     static var canBootVM: Bool {
@@ -395,22 +424,93 @@ struct Harness {
         for marker in homeMarkers where fm.fileExists(atPath: home.appending(path: marker).path) {
             return true
         }
+        return hostBinary() != nil
+    }
+
+    /// The harness on the Mac's PATH, or nil when it is not installed there.
+    func hostBinary() -> URL? {
         let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/local/bin:/usr/bin:/bin"
-        return path.split(separator: ":").contains { fm.isExecutableFile(atPath: "\($0)/\(binary)") }
+        for directory in path.split(separator: ":") {
+            let candidate = "\(directory)/\(binary)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return URL(fileURLWithPath: candidate)
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Host version
+
+    /// The version on the Mac, from `<binary> --version`.
+    /// Remembered per installed file, so the harness runs again only after it changes.
+    func hostVersion() -> String? {
+        guard let tool = hostBinary() else { return nil }
+        // npm resets file times on install, so a reinstall shows as a new inode and change time.
+        let resolved = tool.resolvingSymlinksInPath().path
+        var info = stat()
+        guard stat(resolved, &info) == 0 else { return nil }
+        let key = "\(resolved) \(info.st_ino) \(info.st_ctimespec.tv_sec).\(info.st_ctimespec.tv_nsec)"
+
+        if let cached = try? String(contentsOf: hostVersionCache, encoding: .utf8) {
+            let lines = cached.split(separator: "\n").map(String.init)
+            if lines.count == 2, lines[0] == key, let version = Self.parseVersion(lines[1]) {
+                return version
+            }
+        }
+        guard let output = Self.output(of: tool, ["--version"]),
+              let version = Self.parseVersion(output) else { return nil }
+        try? FileManager.default.createDirectory(at: Paths.provisioning, withIntermediateDirectories: true)
+        try? "\(key)\n\(version)\n".write(to: hostVersionCache, atomically: true, encoding: .utf8)
+        return version
+    }
+
+    /// "codex-cli 0.160.0" or "2.1.177 (Claude Code)" gives the version.
+    /// Only digits, letters, ".", "-" and "+" pass, since the version goes into the install script.
+    static func parseVersion(_ text: String) -> String? {
+        let allowed = CharacterSet(charactersIn:
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-+")
+        for word in text.split(whereSeparator: { $0.isWhitespace }) {
+            guard let first = word.first, first.isASCII, first.isNumber, word.contains("."),
+                  word.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { continue }
+            return String(word)
+        }
+        return nil
+    }
+
+    /// The standard output of a quick host command, or nil if it fails or takes over 5 seconds.
+    private static func output(of tool: URL, _ arguments: [String]) -> String? {
+        let p = Process()
+        p.executableURL = tool
+        p.arguments = arguments
+        let out = Pipe()
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let timeout = DispatchWorkItem { p.terminate() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeout)
+        // Drain to EOF, then wait: reading first cannot deadlock on a full pipe.
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        timeout.cancel()
+        guard p.terminationStatus == 0 else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Throws only when the base image cannot be built; that failure is not the harness's.
+    /// The markers hold the version: what is installed, or what failed to install.
     @discardableResult
-    static func provision(_ harness: Harness) throws -> Int32 {
+    static func provision(_ harness: Harness, version: String?) throws -> Int32 {
         let artifacts = try CLI.provisionOnce()
-        let code = (try? runQuietly(harness, artifacts: artifacts)) ?? 1
+        let code = (try? runQuietly(harness, version: version, artifacts: artifacts)) ?? 1
         let fm = FileManager.default
+        let contents = Data((version ?? "").utf8)
         try? fm.createDirectory(at: Paths.provisioning, withIntermediateDirectories: true)
         try? fm.removeItem(at: harness.failureMarker)
         if code == 0 {
-            fm.createFile(atPath: harness.provisionMarker.path, contents: nil)
+            fm.createFile(atPath: harness.provisionMarker.path, contents: contents)
         } else {
-            fm.createFile(atPath: harness.failureMarker.path, contents: nil)
+            fm.createFile(atPath: harness.failureMarker.path, contents: contents)
             FileHandle.standardError.write(Data(
                 "  \(Terminal.dim)see \(harness.setupLog.path) (retried daily)\(Terminal.reset)\n".utf8))
         }
@@ -418,20 +518,24 @@ struct Harness {
     }
 
     /// A throwaway workspace, so install scripts see none of your files.
-    private static func runQuietly(_ harness: Harness, artifacts: Artifacts) throws -> Int32 {
+    private static func runQuietly(_ harness: Harness, version: String?, artifacts: Artifacts) throws -> Int32 {
         let fm = FileManager.default
         try fm.createDirectory(at: Paths.logs, withIntermediateDirectories: true)
         let scratch = Paths.run.appending(path: "provision-\(harness.binary)-\(getpid())")
         try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: scratch) }
-        var script = harness.installScript
+        var script = harness.installScript(version)
         if let seed = harness.seedScript { script += " && (\(seed))" }
         script += " && save"
         let options = SandboxOptions(hostDir: scratch.path,
                                      command: ["/bin/sh", "-c", script],
                                      networkOn: true, waitForNetwork: true, quiet: true, saveApproved: true)
         let steps = Terminal.Steps()
-        steps.start("Provisioning \(harness.name) inside the microVM")
+        if let version {
+            steps.start("Installing \(harness.name) \(version) inside the microVM to match your Mac")
+        } else {
+            steps.start("Provisioning \(harness.name) inside the microVM")
+        }
         var code: Int32 = 1
         defer { steps.finish(ok: code == 0) }
         code = try redirectingStdout(to: harness.setupLog) {
@@ -454,6 +558,7 @@ struct Harness {
     var provisionMarker: URL { Paths.provisioning.appending(path: "\(binary).provisioned") }
     var failureMarker: URL { Paths.provisioning.appending(path: "\(binary).failed") }
     var setupLog: URL { Paths.logs.appending(path: "setup-\(binary).log") }
+    var hostVersionCache: URL { Paths.provisioning.appending(path: "\(binary).host-version") }
     var lastFailure: Date? {
         (try? FileManager.default.attributesOfItem(atPath: failureMarker.path))?[.modificationDate] as? Date
     }
