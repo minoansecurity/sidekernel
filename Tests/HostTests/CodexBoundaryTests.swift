@@ -176,6 +176,10 @@ struct CodexBoundaryTests {
             .deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appending(path: "guest/codex"), encoding: .utf8)
         let wrapper = directory.appending(path: "wrapper")
+        let libexec = directory.appending(path: "run/sidekernel/libexec")
+        try FileManager.default.createDirectory(at: libexec, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: root.appending(path: "guest/internal/harness.py"),
+                                         to: libexec.appending(path: "harness.py"))
         try source.replacingOccurrences(of: "/usr/local/bin/codex", with: binary.path)
             .write(to: wrapper, atomically: true, encoding: .utf8)
         let child = Process()

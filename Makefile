@@ -7,7 +7,7 @@ SWIFT_TEST_FLAGS ?=
 AGENT_MUSL := agent/target/aarch64-unknown-linux-musl/release/sk-agent
 RESOURCES := Host/Resources
 # Commands on the guest PATH, then internal helpers kept off it.
-GUEST_SCRIPTS := save sk-drop sk-net ramblinwreck codex internal/seed internal/bashrc internal/clip
+GUEST_SCRIPTS := save sk-drop sk-net ramblinwreck codex internal/seed internal/bashrc internal/clip internal/harness.py
 .DEFAULT_GOAL := install
 .PHONY: install build stage sign identity test clean
 

@@ -2,348 +2,118 @@
 # The CLI lives in /usr/local/bin; this wrapper routes inference through the host.
 # No host auth.json, token or API key is needed in the guest.
 import os
-from pathlib import Path
-import re
-import shutil
 import sys
 
+# Shared terminal relay and clipboard paste, installed next to sk-agent.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ.get("SK_ROOT", "") + "/run/sidekernel/libexec")
+from harness import launch
 
-VALUE_OPTIONS = {
+
+BINARY = "/usr/local/bin/codex"
+
+PROXY = [
+    "-c", 'model_provider="sidekernel"',
+    "-c", 'model_providers.sidekernel.name="SideKernel host proxy"',
+    "-c", 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"',
+    "-c", 'model_providers.sidekernel.wire_api="responses"',
+    "-c", "model_providers.sidekernel.requires_openai_auth=false",
+    "-c", "model_providers.sidekernel.supports_websockets=false",
+]
+
+# Codex's own update prompt runs npm inside the microVM and then quits the session.
+# SideKernel installs Codex here, so skip the prompt.
+NO_UPDATE_PROMPT = ["-c", "check_for_update_on_startup=false"]
+
+OVERRIDE_OPTIONS = {"-c", "--config", "--enable", "--disable"}
+VALUE_OPTIONS = OVERRIDE_OPTIONS | {
     "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
     "-C", "--cd", "--add-dir", "--local-provider", "--remote", "--remote-auth-token-env",
-    "-c", "--config", "--enable", "--disable",
 }
+IMAGE_OPTIONS = {"-i", "--image"}
 
 
-def interactive_terminal(argv):
-    """Only the TUI needs the relay; CLI commands keep their original streams."""
-    commands = {
-        "agents", "exec", "e", "review", "login", "logout", "mcp", "mcp-server",
-        "plugin", "app-server", "remote-control", "app", "completion", "update",
-        "doctor", "sandbox", "debug", "apply", "a", "queue", "archive", "delete",
-        "migrate-rollouts", "unarchive", "cloud", "exec-server", "features", "help",
-    }
-    index = 0
-    while index < len(argv):
-        arg = argv[index]
-        if arg == "--":
-            return True
-        if arg in ("-h", "--help", "-V", "--version") or arg in commands:
-            return False
-        if arg in VALUE_OPTIONS:
-            index += 2
-        elif arg in ("-i", "--image"):
-            index += 1
-            while index < len(argv) and not argv[index].startswith("-"):
-                index += 1
+# MARK: - Arguments
+
+def split_overrides(args):
+    """Move config overrides to the top level, ahead of any subcommand.
+
+    Codex's subcommand config overrides replace its top-level override list, so
+    collecting them here keeps the proxy for exec/resume. Everything after -- is
+    literal input, including option-like words.
+
+        ["exec", "-c", "a=1", "hi"]  ->  ["-c", "a=1"], ["exec", "hi"]
+    """
+    overrides, rest = [], []
+    words = iter(args)
+    for word in words:
+        if word == "--":
+            # Keep -- and every word after it as they are.
+            rest.append(word)
+            rest.extend(words)
+        elif word in OVERRIDE_OPTIONS:
+            # -c key=value: the option and the word after it belong together.
+            value = next(words, None)
+            if value is None:
+                rest.append(word)
+            else:
+                overrides += [word, value]
+        elif is_inline_override(word):
+            overrides.append(word)
         else:
-            index += 1
-    return True
+            rest.append(word)
+    return overrides, rest
 
 
-# Match legacy Ctrl+V and the encodings requested by modern terminal keyboard modes.
-# Keep these in sync with ClipboardGrant on the host. Releases do not paste again.
-PASTE_KEYS = (
-    b"\x16", b"\x1b[118;5u", b"\x1b[118;5:1u", b"\x1b[118;5:2u",
-    b"\x1b[27;5;118~",
-)
-PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
+def is_inline_override(word):
+    """An override written as one word, value included.
+
+        --config=key=value   --enable=feature   --disable=feature   -ckey=value
+    """
+    for option in ("--config=", "--enable=", "--disable="):
+        if word.startswith(option):
+            return True
+    # -ckey=value is -c with the value glued on. A bare -c is not inline.
+    return word.startswith("-c") and word != "-c"
 
 
-class PasteInput:
-    """Recognize keys across reads, without treating pasted control bytes as keys."""
+def root_command(args):
+    """Return the first positional word: a subcommand, or the start of a prompt.
 
-    special = re.compile(rb"[\x1b\x16]")
+    Option values are skipped, so `-m login` names a model, not the login command.
+    Everything after -- is literal.
 
-    def __init__(self):
-        self.pending = b""
-        self.bracketed = False
-
-    def feed(self, data, image):
-        output = bytearray()
-        index = 0
-        while index < len(data):
-            if not self.pending:
-                # Copy ordinary text in runs rather than matching every byte against every key.
-                match = self.special.search(data, index)
-                stop = match.start() if match else len(data)
-                output.extend(data[index:stop])
-                index = stop
-                if index == len(data):
-                    break
-            self.pending += data[index:index + 1]
-            index += 1
-            while self.pending:
-                tokens = (PASTE_END,) if self.bracketed else (PASTE_START,) + PASTE_KEYS
-                if self.pending in tokens:
-                    token, self.pending = self.pending, b""
-                    if token == PASTE_START:
-                        self.bracketed = True
-                        output.extend(token)
-                    elif token == PASTE_END:
-                        self.bracketed = False
-                        output.extend(token)
-                    else:
-                        output.extend(image() or token)
-                    break
-                if any(token.startswith(self.pending) for token in tokens):
-                    break
-                output.append(self.pending[0])
-                self.pending = self.pending[1:]
-        return bytes(output)
-
-    def flush(self):
-        # Only a lone Escape is ambiguous with the Escape key. Never discard a
-        # partial paste marker: its remaining bytes may arrive in a later read.
-        if self.bracketed or self.pending != b"\x1b":
-            return b""
-        data, self.pending = self.pending, b""
-        return data
-
-
-def clipboard_image():
-    """Read only through the host's keystroke grant, never through a desktop server."""
-    import subprocess
-    import tempfile
-
-    root = os.environ.get("SK_ROOT", "") + "/run/sidekernel"
-    path = None
-    try:
-        # /run is VM-local and excluded from save; retain successful images until VM shutdown.
-        directory = Path(root) / "clipboard"
-        directory.mkdir(mode=0o700, exist_ok=True)
-        fd, path = tempfile.mkstemp(prefix="codex-", suffix=".png", dir=directory)
-        with os.fdopen(fd, "w+b") as image:
-            result = subprocess.run(
-                [root + "/libexec/sk-agent", "ctl", "clip"],
-                stdin=subprocess.DEVNULL, stdout=image, stderr=subprocess.DEVNULL, timeout=5,
-            )
-            image.seek(0)
-            if result.returncode or not 8 < os.fstat(image.fileno()).st_size <= 67_108_864:
-                return None
-            if image.read(8) != b"\x89PNG\r\n\x1a\n":
-                return None
-        # The path is generated locally, not taken from clipboard text. No Enter is injected.
-        pasted = PASTE_START + os.fsencode(path) + PASTE_END
-        path = None
-        return pasted
-    except (OSError, subprocess.SubprocessError):
-        return None
-    finally:
-        if path is not None:
-            Path(path).unlink(missing_ok=True)
-
-
-def relay_terminal(binary, argv):
-    """Give Codex a controlling PTY and relay its terminal, replacing image-paste keys."""
-    import errno
-    import fcntl
-    import pty
-    import select
-    import signal
-    import termios
-    import time
-    import tty
-
-    saved = termios.tcgetattr(0)
-    size = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8)
-    pid, master = pty.fork()
-    if pid == 0:
-        try:
-            fcntl.ioctl(0, termios.TIOCSWINSZ, size)
-            os.execv(binary, argv)
-        except OSError as error:
-            print(f"codex: {error}", file=sys.stderr)
-            os._exit(127)
-
-    def write_all(fd, data):
-        while data:
-            count = os.write(fd, data)
-            data = data[count:]
-
-    def resize(_signum=None, _frame=None):
-        try:
-            size = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8)
-            fcntl.ioctl(master, termios.TIOCSWINSZ, size)
-        except OSError:
-            pass
-
-    def forward(signum, _frame):
-        try:
-            # Include tools/editor children in the foreground process group.
-            os.killpg(os.tcgetpgrp(master), signum)
-        except (OSError, ProcessLookupError):
-            pass
-
-    def paste_image():
-        # A tool/editor may temporarily own this terminal. Its Ctrl+V has its own
-        # meaning, and a canonical-input prompt cannot accept a bracketed attachment.
-        if os.tcgetpgrp(master) != pid or termios.tcgetattr(master)[3] & termios.ICANON:
+        ["-m", "o3", "exec", "hi"]  ->  "exec"
+    """
+    words = iter(args)
+    reading_images = False
+    for word in words:
+        if word == "--":
             return None
-        return clipboard_image()
+        if reading_images and not word.startswith("-"):
+            # -i takes any number of image paths, up to the next option.
+            continue
+        reading_images = False
+        if word in VALUE_OPTIONS:
+            next(words, None)  # skip the option's value
+        elif word in IMAGE_OPTIONS:
+            reading_images = True
+        elif not word.startswith("-"):
+            return word
+    return None
 
-    handlers = {}
-    status = None
-    parser = PasteInput()
-    pending_since = None
-    try:
-        tty.setraw(0)
-        for signum in (signal.SIGWINCH, signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-            handlers[signum] = signal.signal(signum, resize if signum == signal.SIGWINCH else forward)
-        resize()
-        while True:
-            # Don't hold a standalone Escape while waiting for a possible paste marker.
-            timeout = max(0, 0.03 - (time.monotonic() - pending_since)) if pending_since else 0.25
-            ready, _, _ = select.select([0, master], [], [], timeout)
-            if master in ready:
-                try:
-                    output = os.read(master, 65536)
-                except OSError as error:
-                    if error.errno != errno.EIO:
-                        raise
-                    break
-                if not output:
-                    break
-                write_all(1, output)
-            if 0 in ready:
-                data = os.read(0, 4096)
-                if not data:
-                    break
-                write_all(master, parser.feed(data, paste_image))
-                pending_since = time.monotonic() if parser.pending == b"\x1b" and not parser.bracketed else None
-            if pending_since is not None and time.monotonic() - pending_since >= 0.03:
-                write_all(master, parser.flush())
-                pending_since = None
-            reaped, child_status = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
-            if reaped:
-                if os.WIFSTOPPED(child_status):
-                    # Let an sk shell regain its terminal when Codex handles Ctrl+Z.
-                    termios.tcsetattr(0, termios.TCSANOW, saved)
-                    os.kill(os.getpid(), signal.SIGSTOP)
-                    tty.setraw(0)
-                    resize()
-                    os.killpg(pid, signal.SIGCONT)
-                    continue
-                status = child_status
-                # The PTY may still contain the final output; drain it until EOF.
-                deadline = time.monotonic() + 1
-                while time.monotonic() < deadline and select.select([master], [], [], 0.03)[0]:
-                    try:
-                        output = os.read(master, 65536)
-                    except OSError as error:
-                        if error.errno != errno.EIO:
-                            raise
-                        break
-                    if not output:
-                        break
-                    write_all(1, output)
-                break
-    finally:
-        try:
-            foreground = os.tcgetpgrp(master)
-        except OSError:
-            foreground = pid
-        os.close(master)  # Hang up the child on input EOF or a relay failure.
-        try:
-            termios.tcsetattr(0, termios.TCSANOW, saved)
-        except OSError:
-            pass  # The outer terminal may already have disconnected.
-        for signum, handler in handlers.items():
-            signal.signal(signum, handler)
-        if status is None:
-            # A child can ignore SIGHUP; don't leave the shell waiting forever on EOF.
-            for signum in (None, signal.SIGTERM, signal.SIGKILL):
-                if signum is not None:
-                    for group in {pid, foreground}:
-                        if group > 0:
-                            try:
-                                os.killpg(group, signum)
-                            except ProcessLookupError:
-                                pass
-                if signum == signal.SIGKILL:
-                    _, status = os.waitpid(pid, 0)
-                    break
-                deadline = time.monotonic() + 1
-                while time.monotonic() < deadline:
-                    reaped, child_status = os.waitpid(pid, os.WNOHANG)
-                    if reaped:
-                        status = child_status
-                        break
-                    time.sleep(0.01)
-                if status is not None:
-                    break
-    if os.WIFSIGNALED(status):
-        return 128 + os.WTERMSIG(status)
-    return os.WEXITSTATUS(status)
 
+# MARK: - Entry
 
 def main():
-    # Codex's subcommand config overrides replace its top-level override list.
-    # Collect them at the top level so normal exec/resume options keep the proxy.
-    # Stop at --: everything after it is literal input, including option-like words.
-    args = sys.argv[1:]
-    overrides = []
-    passthrough = []
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg == "--":
-            passthrough.extend(args[index:])
-            break
-        if arg in ("-c", "--config", "--enable", "--disable") and index + 1 < len(args):
-            overrides.extend((arg, args[index + 1]))
-            index += 2
-            continue
-        if arg.startswith(("--config=", "--enable=", "--disable=")) or (arg.startswith("-c") and len(arg) > 2):
-            overrides.append(arg)
-        else:
-            passthrough.append(arg)
-        index += 1
-
-    # Find the root subcommand after global flags and their values. A prompt after
-    # --, or an option value named login/logout, must stay literal.
-    index = 0
-    while index < len(passthrough):
-        arg = passthrough[index]
-        if arg == "--" or arg in ("-h", "--help", "-V", "--version"):
-            break
-        if arg in VALUE_OPTIONS:
-            index += 2
-            continue
-        if arg in ("-i", "--image"):
-            index += 1
-            while index < len(passthrough) and not passthrough[index].startswith("-"):
-                index += 1
-            continue
-        if not arg.startswith("-"):
-            if arg in ("login", "logout"):
-                print("Codex authentication is managed on the host. Run codex login or codex logout on your Mac.", file=sys.stderr)
-                sys.exit(1)
-            break
-        index += 1
-
-    binary = "/usr/local/bin/codex"
-    if not os.access(binary, os.X_OK):
-        sys.exit(127)
-    home = Path(os.environ.get("CODEX_HOME") or "/run/sk-project/codex")
-    os.environ["CODEX_HOME"] = str(home)
-    home.mkdir(parents=True, exist_ok=True)
-    guidance = Path(os.environ.get("SK_ROOT", "") + "/run/sk-seed/codex/AGENTS.md")
-    if guidance.is_file():
-        shutil.copyfile(guidance, home / "AGENTS.md")
-
-    proxy = [
-        '-c', 'model_provider="sidekernel"',
-        '-c', 'model_providers.sidekernel.name="SideKernel host proxy"',
-        '-c', 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"',
-        '-c', 'model_providers.sidekernel.wire_api="responses"',
-        '-c', 'model_providers.sidekernel.requires_openai_auth=false',
-        '-c', 'model_providers.sidekernel.supports_websockets=false',
-    ]
-    argv = [binary] + proxy + overrides + passthrough
-    if os.isatty(0) and os.isatty(1) and interactive_terminal(passthrough):
-        return relay_terminal(binary, argv)
-    os.execv(binary, argv)
+    overrides, args = split_overrides(sys.argv[1:])
+    if root_command(args) in ("login", "logout"):
+        print("Codex authentication is managed on the host. Run codex login or codex logout on your Mac.", file=sys.stderr)
+        return 1
+    if not os.access(BINARY, os.X_OK):
+        print("codex: not installed in this microVM", file=sys.stderr)
+        return 127
+    return launch(BINARY, [BINARY] + PROXY + NO_UPDATE_PROMPT + overrides + args)
 
 
 if __name__ == "__main__":
