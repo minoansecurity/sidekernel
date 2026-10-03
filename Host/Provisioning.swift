@@ -39,6 +39,11 @@ public struct Provisioning {
         static let gpgKeyFingerprint = "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
     }
 
+    /// Used only when the Mac has no Codex CLI to match; otherwise the microVM gets the Mac's version.
+    enum Codex {
+        static let version = "0.159.2"
+    }
+
     private let root: URL
     private var images: URL { root.appending(path: "images") }
     private var logs: URL { root.appending(path: "logs") }
@@ -229,7 +234,7 @@ public struct Provisioning {
     /// PID 1 moves this tree to /run/sidekernel; only bin/ is on PATH.
     private static let guestTools = [("save", "bin"), ("sk-drop", "bin"), ("sk-net", "bin"),
                                      ("ramblinwreck", "bin"), ("clip", "libexec"), ("seed", "libexec"),
-                                     ("bashrc", "")]
+                                     ("harness.py", "libexec"), ("codex", "bin"), ("bashrc", "")]
     private static let guestAliases = ["fightsong": "ramblinwreck", "xclip": "../libexec/clip",
                                        "wl-paste": "../libexec/clip", "wl-copy": "../libexec/clip",
                                        "pbcopy": "../libexec/clip"]
@@ -461,7 +466,7 @@ public struct Provisioning {
         _ = FDIO.writeFrame(control, .helloExec(networkOn: true))
         _ = FDIO.writeFrame(control, .exec(nonce: nonce, workdir: "/",
                                            argv: ["/bin/sh", "-c", script], env: [],
-                                           cols: 0, rows: 0))
+                                           tty: false, cols: 0, rows: 0))
         var exitCode: Int32 = -1
         loop: while true {
             switch try FDIO.readFrame(control, cap: Contract.maxControlFrame) {
@@ -489,7 +494,7 @@ public struct Provisioning {
         guard let hello = try? FDIO.readFrame(fd, cap: Contract.maxControlFrame),
               case .helloStdio(let which, let helloNonce) = hello, helloNonce == nonce
         else { close(fd); return }
-        guard which == .stdout else { held.add(fd); return }
+        guard which == .stdout || which == .stderr else { held.add(fd); return }
         FDIO.setReadTimeout(fd, seconds: 3600)
         let marker = Array("\(stepMarker) ".utf8)
         var line: [UInt8] = []

@@ -47,9 +47,14 @@ The first run downloads a Linux kernel (from Kata Containers) and an Ubuntu base
 sk          # launch an ephemeral microVM, current directory mounted
 sidekernel  # (alias: sk)
 sclaude     # launch a sandbox and start Claude Code directly
+scodex      # launch a sandbox and start Codex directly
 ```
 
-Coming soon: `scodex`, `sgemini`, `sgrok`, and more.
+Log in on the host first (`claude` / `codex login`), or set `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` on the host. The sandbox uses that login through a host proxy;
+your login files, API keys, and OAuth tokens stay outside the microVM.
+
+Coming soon: `sgemini`, `sgrok`, and more.
 
 **Inside the sandbox:**
 

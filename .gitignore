@@ -2,6 +2,7 @@
 .build/
 agent/target/
 Host/Resources/
+__pycache__/
 
 # Editor and OS cruft
 .vscode/

@@ -72,11 +72,21 @@ public enum Clipboard {
 public final class ClipboardGrant: @unchecked Sendable {
     /// Ctrl+V, Claude Code's image-paste key on Linux.
     static let pasteByte: UInt8 = 0x16
+    // Codex may request Kitty/CSI-u or modifyOtherKeys reporting. Accept the same
+    // Ctrl+V press/repeat as the legacy byte; a key release never opens a grant.
+    // Keep in sync with PASTE_KEYS in guest/internal/harness.py.
+    private static let pasteKeys = ["\u{1B}[118;5u", "\u{1B}[118;5:1u", "\u{1B}[118;5:2u",
+                                    "\u{1B}[27;5;118~"].map { Array($0.utf8) } + [[pasteByte]]
+    private static let pasteStart = Array("\u{1B}[200~".utf8)
+    private static let pasteEnd = Array("\u{1B}[201~".utf8)
+    private static let inputKeys = pasteKeys + [pasteStart]
 
     private let window: TimeInterval
     private let now: () -> Date
     private let lock = NSLock()
     private var armedAt: Date?
+    private var inputTail: [UInt8] = []
+    private var bracketedPaste = false
 
     public convenience init() {
         self.init(window: 10, now: Date.init)
@@ -88,10 +98,25 @@ public final class ClipboardGrant: @unchecked Sendable {
     }
 
     public func noteInput(_ bytes: ArraySlice<UInt8>) {
-        guard bytes.contains(Self.pasteByte) else { return }
         lock.lock()
         defer { lock.unlock() }
-        armedAt = now()
+        for byte in bytes {
+            // Ordinary text cannot be a paste key or terminal marker.
+            if inputTail.isEmpty && byte != 0x1B && byte != Self.pasteByte { continue }
+            inputTail.append(byte)
+            while !inputTail.isEmpty {
+                let keys = bracketedPaste ? [Self.pasteEnd] : Self.inputKeys
+                if keys.contains(inputTail) {
+                    if inputTail == Self.pasteStart { bracketedPaste = true }
+                    else if inputTail == Self.pasteEnd { bracketedPaste = false }
+                    else { armedAt = now() }
+                    inputTail.removeAll(keepingCapacity: true)
+                    break
+                }
+                if keys.contains(where: { $0.starts(with: inputTail) }) { break }
+                inputTail.removeFirst()
+            }
+        }
     }
 
     public var isLive: Bool {

@@ -1,0 +1,120 @@
+#!/usr/bin/python3
+# The CLI lives in /usr/local/bin; this wrapper routes inference through the host.
+# No host auth.json, token or API key is needed in the guest.
+import os
+import sys
+
+# Shared terminal relay and clipboard paste, installed next to sk-agent.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ.get("SK_ROOT", "") + "/run/sidekernel/libexec")
+from harness import launch
+
+
+BINARY = "/usr/local/bin/codex"
+
+PROXY = [
+    "-c", 'model_provider="sidekernel"',
+    "-c", 'model_providers.sidekernel.name="SideKernel host proxy"',
+    "-c", 'model_providers.sidekernel.base_url="http://127.0.0.1:4242/codex"',
+    "-c", 'model_providers.sidekernel.wire_api="responses"',
+    "-c", "model_providers.sidekernel.requires_openai_auth=false",
+    "-c", "model_providers.sidekernel.supports_websockets=false",
+]
+
+# Codex's own update prompt runs npm inside the microVM and then quits the session.
+# SideKernel installs Codex here, so skip the prompt.
+NO_UPDATE_PROMPT = ["-c", "check_for_update_on_startup=false"]
+
+OVERRIDE_OPTIONS = {"-c", "--config", "--enable", "--disable"}
+VALUE_OPTIONS = OVERRIDE_OPTIONS | {
+    "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
+    "-C", "--cd", "--add-dir", "--local-provider", "--remote", "--remote-auth-token-env",
+}
+IMAGE_OPTIONS = {"-i", "--image"}
+
+
+# MARK: - Arguments
+
+def split_overrides(args):
+    """Move config overrides to the top level, ahead of any subcommand.
+
+    Codex's subcommand config overrides replace its top-level override list, so
+    collecting them here keeps the proxy for exec/resume. Everything after -- is
+    literal input, including option-like words.
+
+        ["exec", "-c", "a=1", "hi"]  ->  ["-c", "a=1"], ["exec", "hi"]
+    """
+    overrides, rest = [], []
+    words = iter(args)
+    for word in words:
+        if word == "--":
+            # Keep -- and every word after it as they are.
+            rest.append(word)
+            rest.extend(words)
+        elif word in OVERRIDE_OPTIONS:
+            # -c key=value: the option and the word after it belong together.
+            value = next(words, None)
+            if value is None:
+                rest.append(word)
+            else:
+                overrides += [word, value]
+        elif is_inline_override(word):
+            overrides.append(word)
+        else:
+            rest.append(word)
+    return overrides, rest
+
+
+def is_inline_override(word):
+    """An override written as one word, value included.
+
+        --config=key=value   --enable=feature   --disable=feature   -ckey=value
+    """
+    for option in ("--config=", "--enable=", "--disable="):
+        if word.startswith(option):
+            return True
+    # -ckey=value is -c with the value glued on. A bare -c is not inline.
+    return word.startswith("-c") and word != "-c"
+
+
+def root_command(args):
+    """Return the first positional word: a subcommand, or the start of a prompt.
+
+    Option values are skipped, so `-m login` names a model, not the login command.
+    Everything after -- is literal.
+
+        ["-m", "o3", "exec", "hi"]  ->  "exec"
+    """
+    words = iter(args)
+    reading_images = False
+    for word in words:
+        if word == "--":
+            return None
+        if reading_images and not word.startswith("-"):
+            # -i takes any number of image paths, up to the next option.
+            continue
+        reading_images = False
+        if word in VALUE_OPTIONS:
+            next(words, None)  # skip the option's value
+        elif word in IMAGE_OPTIONS:
+            reading_images = True
+        elif not word.startswith("-"):
+            return word
+    return None
+
+
+# MARK: - Entry
+
+def main():
+    overrides, args = split_overrides(sys.argv[1:])
+    if root_command(args) in ("login", "logout"):
+        print("Codex authentication is managed on the host. Run codex login or codex logout on your Mac.", file=sys.stderr)
+        return 1
+    if not os.access(BINARY, os.X_OK):
+        print("codex: not installed in this microVM", file=sys.stderr)
+        return 127
+    return launch(BINARY, [BINARY] + PROXY + NO_UPDATE_PROMPT + overrides + args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

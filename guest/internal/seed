@@ -1,5 +1,5 @@
 #!/bin/sh
-# Merges the host's read-only seed into the agent config, then execs the command.
+# Merges the host's read-only seed into each harness config, then execs the command.
 # All config writes happen here, guest-side, so nothing the guest plants can redirect a host write.
 # With --lazy, the slow copy runs in the background and the shell's `claude` waits for it.
 set -u
@@ -71,6 +71,12 @@ if [ -d "$SEED" ] && mkdir -p "$CONFIG" 2> /dev/null; then
             printf '%s\n' "$merged" > "$settings.sk-tmp" && mv -f "$settings.sk-tmp" "$settings"
         fi
     fi
+fi
+
+# Codex gets only the sandbox guidance. It refuses to start if its home is missing.
+CODEX="${CODEX_HOME:-${SK_ROOT:-}/run/sk-project/codex}"
+if mkdir -p "$CODEX" 2> /dev/null; then
+    cp -f "${SK_ROOT:-}/run/sk-seed/codex/AGENTS.md" "$CODEX/AGENTS.md" 2> /dev/null || true
 fi
 
 exec "$@"

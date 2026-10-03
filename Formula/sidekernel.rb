@@ -26,7 +26,7 @@ class Sidekernel < Formula
     resources_dir = buildpath/"Host/Resources"
     resources_dir.mkpath
     cp "agent/target/aarch64-unknown-linux-musl/release/sk-agent", resources_dir
-    %w[save sk-drop sk-net ramblinwreck internal/seed internal/bashrc internal/clip].each do |script|
+    %w[save sk-drop sk-net ramblinwreck codex internal/seed internal/bashrc internal/clip].each do |script|
       cp "guest/#{script}", resources_dir/File.basename(script)
     end
 
@@ -37,7 +37,7 @@ class Sidekernel < Formula
 
     # The binary picks its role from argv[0] and finds its resources beside its resolved path.
     libexec.install ".build/release/Sidekernel_Host.bundle", ".build/release/Host" => "sidekernel"
-    %w[sidekernel sk sclaude].each { |name| bin.install_symlink libexec/"sidekernel" => name }
+    %w[sidekernel sk sclaude scodex].each { |name| bin.install_symlink libexec/"sidekernel" => name }
   end
 
   test do

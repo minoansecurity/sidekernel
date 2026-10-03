@@ -1,16 +1,23 @@
 import Foundation
 import Darwin
 
-/// Forwards guest API requests to api.anthropic.com with the real credential injected.
+/// Forwards guest inference requests to pinned upstreams with host credentials injected.
 public final class Proxy {
     private let credentials: Credentials
+    private let codex: CodexCredentials
     private let session: URLSession
 
-    public init(credentials: Credentials) {
+    public convenience init(credentials: Credentials) {
+        self.init(credentials: credentials, codex: CodexCredentials())
+    }
+
+    init(credentials: Credentials, codex: CodexCredentials) {
         self.credentials = credentials
+        self.codex = codex
         let cfg = URLSessionConfiguration.ephemeral
         // Not timeoutIntervalForResource, which would cap long streaming generations.
         cfg.timeoutIntervalForRequest = 60
+        cfg.httpShouldSetCookies = false
         self.session = URLSession(configuration: cfg)
     }
 
@@ -20,7 +27,13 @@ public final class Proxy {
         FDIO.setReadTimeout(fd, seconds: 10)
         Self.setWriteTimeout(fd, seconds: 30)
         guard let request = Self.readRequest(fd) else { return }
-        guard let upstream = buildUpstreamRequest(request) else {
+        let upstream: URLRequest
+        do { upstream = try prepareUpstreamRequest(request) }
+        catch RequestError.codexLoginRequired {
+            _ = FDIO.writeAll(fd, Array(Self.codexLoginRequired.utf8))
+            return
+        }
+        catch {
             _ = FDIO.writeAll(fd, Self.badGateway)
             return
         }
@@ -37,15 +50,33 @@ public final class Proxy {
     static let allowedPaths: Set<String> = ["/v1/messages", "/v1/messages/count_tokens", "/api/hello"]
     static let upstreamHost = "api.anthropic.com"
 
+    enum RequestError: Error { case refused, codexLoginRequired }
+
+    static let probeMethods: Set<String> = ["GET", "HEAD", "OPTIONS"]
+
+    /// Bodyless idempotent requests are base-URL probes, not channel misuse worth surfacing.
+    static func isNotableRefusal(_ request: HTTPRequest) -> Bool {
+        !request.body.isEmpty || !probeMethods.contains(request.method.uppercased())
+    }
+
     func buildUpstreamRequest(_ request: HTTPRequest) -> URLRequest? {
+        try? prepareUpstreamRequest(request)
+    }
+
+    func prepareUpstreamRequest(_ request: HTTPRequest) throws -> URLRequest {
+        if request.path.hasPrefix(Contract.codexProxyPath + "/") {
+            return try buildCodexRequest(request)
+        }
         let pathOnly = String(request.path.prefix { $0 != "?" })
         guard Self.allowedPaths.contains(pathOnly) else {
-            Terminal.notice("proxy refused \(Self.printable(request.method)) \(Self.printable(request.path))")
-            return nil
+            if Self.isNotableRefusal(request) {
+                Terminal.notice("proxy refused \(Self.printable(request.method)) \(Self.printable(request.path))")
+            }
+            throw RequestError.refused
         }
         guard let injection = credentials.resolveAnthropic(),
               let url = Self.pinnedURL(host: Self.upstreamHost, guestPath: request.path)
-        else { return nil }
+        else { throw RequestError.refused }
 
         var headers = Self.stripCredentialHeaders(request.headers)
         // URLSession owns these; forwarding the guest's copies corrupts framing and routing.
@@ -60,6 +91,41 @@ public final class Proxy {
             Self.mergeAnthropicBeta(into: &headers, flag: Credentials.oauthBetaFlag)
         }
 
+        var upstream = URLRequest(url: url)
+        upstream.httpMethod = request.method
+        for (key, value) in headers { upstream.setValue(value, forHTTPHeaderField: key) }
+        if !request.body.isEmpty { upstream.httpBody = request.body }
+        return upstream
+    }
+
+    /// Exact method/path pairs only: the guest cannot use host auth on other APIs.
+    func buildCodexRequest(_ request: HTTPRequest) throws -> URLRequest {
+        let path = String(request.path.dropFirst(Contract.codexProxyPath.count))
+        let pathOnly = String(path.prefix { $0 != "?" })
+        guard (request.method == "POST" && ["/responses", "/responses/compact"].contains(pathOnly))
+            || (request.method == "GET" && pathOnly == "/models") else { throw RequestError.refused }
+        guard Self.pinnedURL(host: "api.openai.com", guestPath: path) != nil else { throw RequestError.refused }
+        guard let login = codex.resolve() else { throw RequestError.codexLoginRequired }
+        var headers = Self.stripCredentialHeaders(request.headers)
+        for managed in ["host", "content-length", "connection", "accept-encoding", "chatgpt-account-id",
+                        "openai-organization", "openai-project", "cookie", "proxy-authorization"] {
+            headers[managed] = nil
+        }
+        let host: String, upstreamPath: String, bearer: String
+        switch login {
+        case .apiKey(let key):
+            host = "api.openai.com"
+            upstreamPath = "/v1" + path
+            bearer = key
+        case .chatGPT(let token, let accountID):
+            host = "chatgpt.com"
+            upstreamPath = "/backend-api/codex" + path
+            bearer = token
+            if let accountID, !accountID.isEmpty { headers["chatgpt-account-id"] = accountID }
+            headers["originator"] = "codex_cli_rs"
+        }
+        guard let url = Self.pinnedURL(host: host, guestPath: upstreamPath) else { throw RequestError.refused }
+        headers["authorization"] = "Bearer \(bearer)"
         var upstream = URLRequest(url: url)
         upstream.httpMethod = request.method
         for (key, value) in headers { upstream.setValue(value, forHTTPHeaderField: key) }
@@ -106,6 +172,8 @@ public final class Proxy {
     // MARK: - Request reading
 
     static let badGateway = Array("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".utf8)
+    static let codexLoginRequired = "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+        + #"{"error":{"message":"Run codex login on the host, or set OPENAI_API_KEY on the host.","type":"authentication_error"}}"#
     /// The guest picks Content-Length, so cap what it can make us allocate up front.
     static let maxBodyBytes = 32 << 20
     static let maxHeaderBytes = 64 * 1024

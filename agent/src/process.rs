@@ -1,9 +1,10 @@
-//! Runs the host's command on a fresh PTY, with stdio over vsock.
+//! Runs interactive commands on a PTY and noninteractive commands on byte streams.
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::thread;
 
 use crate::contract::{Frame, StdioStream, SERVICE_PORT};
@@ -14,7 +15,10 @@ use crate::vsock;
 /// Killed and reaped on drop.
 pub struct RunningProcess {
     pid: c_int,
-    master: OwnedFd,
+    input: Option<OwnedFd>,
+    output: OwnedFd,
+    error: Option<OwnedFd>,
+    tty: bool,
     reaped: bool,
 }
 
@@ -27,7 +31,7 @@ const BASE_ENV: [&str; 4] = [
 
 /// Everything is allocated before the fork.
 pub fn spawn(workdir: &str, argv: &[String], env: &[String],
-             cols: u16, rows: u16) -> io::Result<RunningProcess> {
+             tty: bool, cols: u16, rows: u16) -> io::Result<RunningProcess> {
     if argv.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "exec has empty argv"));
     }
@@ -38,31 +42,44 @@ pub fn spawn(workdir: &str, argv: &[String], env: &[String],
     let workdir = CString::new(workdir).map_err(nul_error)?;
     let argv_pointers = pointer_vec(&argv_owned);
     let envp_pointers = pointer_vec(&envp_owned);
-    let (master, slave) = open_pty(cols, rows)?;
+    let (input, output, error, child_input, child_output, child_error) = if tty {
+        let (master, slave) = open_pty(cols, rows)?;
+        (dup_cloexec(master.as_raw_fd())?, master, None,
+         dup_cloexec(slave.as_raw_fd())?, dup_cloexec(slave.as_raw_fd())?, slave)
+    } else {
+        // Separate sockets preserve arbitrary bytes and deliver EOF when input closes.
+        // UnixStream::pair creates close-on-exec descriptors, just like the PTY path.
+        let (input, child_input) = UnixStream::pair()?;
+        let (output, child_output) = UnixStream::pair()?;
+        let (error, child_error) = UnixStream::pair()?;
+        (OwnedFd::from(input), OwnedFd::from(output), Some(OwnedFd::from(error)),
+         OwnedFd::from(child_input), OwnedFd::from(child_output), OwnedFd::from(child_error))
+    };
 
     let pid = unsafe { sys::fork() };
     if pid < 0 {
         return Err(io::Error::last_os_error());
     }
     if pid == 0 {
-        exec_child(&executable, &argv_pointers, &envp_pointers, &workdir, slave.as_raw_fd());
+        exec_child(&executable, &argv_pointers, &envp_pointers, &workdir,
+                   child_input.as_raw_fd(), child_output.as_raw_fd(), child_error.as_raw_fd(), tty);
     }
-    Ok(RunningProcess { pid, master, reaped: false })
+    Ok(RunningProcess { pid, input: Some(input), output, error, tty, reaped: false })
 }
 
 /// Async-signal-safe calls only.
 fn exec_child(executable: &CStr, argv: &[*const c_char], envp: &[*const c_char],
-              workdir: &CStr, slave: RawFd) -> ! {
+              workdir: &CStr, input: RawFd, output: RawFd, error: RawFd, tty: bool) -> ! {
     unsafe {
         let mut set = sys::SigSet([0; 16]);
         sys::sigemptyset(&mut set);
         sys::sigaddset(&mut set, sys::SIGCHLD);
         sys::sigprocmask(sys::SIG_UNBLOCK, &set, std::ptr::null_mut());
         sys::setsid();
-        sys::ioctl(slave, sys::TIOCSCTTY, std::ptr::null_mut());
-        sys::dup2(slave, 0);
-        sys::dup2(slave, 1);
-        sys::dup2(slave, 2);
+        if tty { sys::ioctl(input, sys::TIOCSCTTY, std::ptr::null_mut()); }
+        sys::dup2(input, 0);
+        sys::dup2(output, 1);
+        sys::dup2(error, 2);
         // Abort rather than exec in the wrong directory: `save` tars its cwd.
         if sys::chdir(workdir.as_ptr()) != 0 {
             let message = b"sk-agent: cannot enter workdir\n";
@@ -75,23 +92,31 @@ fn exec_child(executable: &CStr, argv: &[*const c_char], envp: &[*const c_char],
 }
 
 impl RunningProcess {
-    pub fn master_fd(&self) -> RawFd {
-        self.master.as_raw_fd()
+    pub fn terminal_fd(&self) -> Option<RawFd> {
+        self.tty.then(|| self.output.as_raw_fd())
     }
 
     pub fn forward_stdio_and_wait(&mut self, nonce: &str) -> io::Result<i32> {
-        set_nonblocking(self.master.as_raw_fd())?;
+        set_nonblocking(self.output.as_raw_fd())?;
         let stdin_connection = dial_stdio(StdioStream::Stdin, nonce)?;
         let stdout_connection = dial_stdio(StdioStream::Stdout, nonce)?;
+        let error_pump = if let Some(error) = &self.error {
+            set_nonblocking(error.as_raw_fd())?;
+            let error = dup_cloexec(error.as_raw_fd())?;
+            let connection = dial_stdio(StdioStream::Stderr, nonce)?;
+            Some(thread::spawn(move || pump_stdout(error, connection)))
+        } else { None };
 
-        // Each pump owns a dup, never the bare fd number, which a later PTY could recycle.
-        let stdin_master = dup_cloexec(self.master.as_raw_fd())?;
-        thread::spawn(move || pump_stdin(stdin_connection, stdin_master));
-        let stdout_master = dup_cloexec(self.master.as_raw_fd())?;
-        let stdout_pump = thread::spawn(move || pump_stdout(stdout_master, stdout_connection));
+        // Move the sole input endpoint into the pump: its drop delivers non-TTY EOF.
+        let input = self.input.take().ok_or_else(|| io::Error::other("stdio already forwarded"))?;
+        set_nonblocking(input.as_raw_fd())?;
+        thread::spawn(move || pump_stdin(stdin_connection, input));
+        let output = dup_cloexec(self.output.as_raw_fd())?;
+        let stdout_pump = thread::spawn(move || pump_stdout(output, stdout_connection));
 
         let code = self.wait();
         let _ = stdout_pump.join();
+        if let Some(pump) = error_pump { let _ = pump.join(); }
         Ok(code)
     }
 
@@ -230,7 +255,7 @@ fn pump_stdin(mut host: File, master: OwnedFd) {
     }
 }
 
-/// Runs until the PTY itself ends, so a fast exit keeps its tail.
+/// Runs until the child stream ends, so a fast exit keeps its tail.
 fn pump_stdout(master: OwnedFd, mut host: File) {
     let fd = master.as_raw_fd();
     let mut buffer = [0u8; 4096];
@@ -284,9 +309,9 @@ mod tests {
 
     #[test]
     fn spawn_rejects_empty_argv_and_interior_nul() {
-        let Err(err) = spawn("/", &[], &[], 0, 0) else { panic!("empty argv must not spawn") };
+        let Err(err) = spawn("/", &[], &[], false, 0, 0) else { panic!("empty argv must not spawn") };
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        let Err(err) = spawn("/", &s(&["/bin/sh", "bad\0arg"]), &[], 0, 0) else { panic!("NUL must not spawn") };
+        let Err(err) = spawn("/", &s(&["/bin/sh", "bad\0arg"]), &[], false, 0, 0) else { panic!("NUL must not spawn") };
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
@@ -294,18 +319,50 @@ mod tests {
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "forks a child on a Linux PTY; the ioctl numbers in sys.rs are the guest kernel's, not the macOS build host's")]
     fn child_lifecycle_exit_codes_chdir_abort_and_drop_reap() {
-        let mut child = spawn("/", &s(&["sh", "-c", "exit 7"]), &[], 80, 24).unwrap();
+        let mut child = spawn("/", &s(&["sh", "-c", "exit 7"]), &[], true, 80, 24).unwrap();
         assert_eq!(child.wait(), 7);
-        let mut child = spawn("/", &s(&["true"]), &[], 0, 0).unwrap();
+        let mut child = spawn("/", &s(&["true"]), &[], false, 0, 0).unwrap();
         assert_eq!(child.wait(), 0);
-        let mut child = spawn("/", &s(&["sh", "-c", "kill -9 $$"]), &[], 0, 0).unwrap();
+        let mut child = spawn("/", &s(&["sh", "-c", "kill -9 $$"]), &[], false, 0, 0).unwrap();
         assert_eq!(child.wait(), 137);
-        let mut child = spawn("/does-not-exist", &s(&["true"]), &[], 0, 0).unwrap();
+        let mut child = spawn("/does-not-exist", &s(&["true"]), &[], false, 0, 0).unwrap();
         assert_eq!(child.wait(), 127);
-        let child = spawn("/", &s(&["sleep", "600"]), &[], 0, 0).unwrap();
+        let child = spawn("/", &s(&["sleep", "600"]), &[], false, 0, 0).unwrap();
         let pid = child.pid;
         drop(child);
         let rc = unsafe { sys::waitpid(pid, std::ptr::null_mut(), sys::WNOHANG) };
         assert!(rc < 0, "drop must already have reaped the child, got {rc}");
+
+        let mut child = spawn("/", &s(&["cat"]), &[], false, 0, 0).unwrap();
+        assert!(child.terminal_fd().is_none());
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        let input = child.input.take().unwrap();
+        set_nonblocking(input.as_raw_fd()).unwrap();
+        let input_pump = thread::spawn(move || pump_stdin(File::from(OwnedFd::from(receiver)), input));
+        let payload: Vec<u8> = (0..65536).map(|n| (n % 256) as u8).collect();
+        let expected = payload.clone();
+        let writer = thread::spawn(move || {
+            sender.write_all(&payload).unwrap();
+            sender.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        let mut output = File::from(dup_cloexec(child.output.as_raw_fd()).unwrap());
+        let mut received = Vec::new();
+        output.read_to_end(&mut received).unwrap();
+        assert_eq!(received, expected, "piped bytes must not be echoed or transformed by a terminal");
+        assert_eq!(child.wait(), 0, "cat must exit when the input stream reaches EOF");
+        writer.join().unwrap();
+        input_pump.join().unwrap();
+
+        let mut child = spawn("/", &s(&["sh", "-c", "printf OUT; printf ERR >&2"]), &[], false, 0, 0).unwrap();
+        drop(child.input.take());
+        let mut output = File::from(dup_cloexec(child.output.as_raw_fd()).unwrap());
+        let mut error = File::from(dup_cloexec(child.error.as_ref().unwrap().as_raw_fd()).unwrap());
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        output.read_to_string(&mut stdout).unwrap();
+        error.read_to_string(&mut stderr).unwrap();
+        assert_eq!(stdout, "OUT");
+        assert_eq!(stderr, "ERR");
+        assert_eq!(child.wait(), 0);
     }
 }

@@ -17,7 +17,7 @@ public final class Session {
     }
 
     public func run(controlFd: Int32, command: [String], workDir: String,
-                    env: [String], networkOn: Bool, tty: Bool) throws -> Int32 {
+                    env: [String], networkOn: Bool, tty: Bool, forwardStdin: Bool = true) throws -> Int32 {
         defer { close(controlFd) }
         guard FDIO.writeFrame(controlFd, .helloExec(networkOn: networkOn)) else {
             throw SidekernelError.agentProtocol("control connection closed before hello")
@@ -27,11 +27,12 @@ public final class Session {
         // The size rides in Exec, so the PTY is sized before the fork and a TUI never re-flows.
         let size = interactive ? Terminal.windowSize() : nil
         let nonce = Contract.randomNonce()
-        arm(nonce: nonce)
+        arm(nonce: nonce, streams: interactive ? 2 : 3)
         defer { disarm() }
 
         guard FDIO.writeFrame(controlFd, .exec(nonce: nonce, workdir: workDir, argv: command,
-                                               env: env, cols: size?.cols ?? 0, rows: size?.rows ?? 0)) else {
+                                               env: env, tty: interactive,
+                                               cols: size?.cols ?? 80, rows: size?.rows ?? 24)) else {
             throw SidekernelError.agentProtocol("control connection closed before exec")
         }
         switch try FDIO.readFrame(controlFd, cap: Contract.maxControlFrame) {
@@ -39,22 +40,37 @@ public final class Session {
         case .error(let reason): throw SidekernelError.agentProtocol("guest refused exec: \(reason)")
         default: throw SidekernelError.agentProtocol("unexpected reply to Exec")
         }
-        let (stdinFd, stdoutFd) = try awaitStdio()
-        defer { close(stdinFd); close(stdoutFd) }
+        let fds = try awaitStdio()
+        let stdinFd = fds[0]
+        defer { fds.forEach { close($0) } }
+        let forwardInput = forwardStdin && (interactive || isatty(STDIN_FILENO) == 0)
+        let inputFd = forwardInput ? dup(stdinFd) : -1
+        guard !forwardInput || inputFd >= 0 else {
+            throw SidekernelError.agentProtocol("cannot duplicate stdin connection")
+        }
 
         let terminal = interactive ? SessionTerminal(networkOn: networkOn) : nil
         defer { terminal?.restore() }
 
-        let stdoutDone = DispatchSemaphore(value: 0)
-        Thread {
-            if tty { Self.pumpGuestOutput(from: stdoutFd, to: STDOUT_FILENO) }
-            else { FDIO.pump(from: stdoutFd, to: STDOUT_FILENO) }
-            stdoutDone.signal()
-        }.start()
-        // Only a tty run forwards input: a second reader would steal the operator's keystrokes.
-        if tty {
+        let outputDone = DispatchSemaphore(value: 0)
+        for (fd, destination) in zip(fds.dropFirst(), [STDOUT_FILENO, STDERR_FILENO]) {
+            let filtered = Self.filtersGuestOutput(to: destination, interactive: interactive)
+            Thread {
+                if filtered { Self.pumpGuestOutput(from: fd, to: destination) }
+                else { FDIO.pump(from: fd, to: destination) }
+                outputDone.signal()
+            }.start()
+        }
+        // Quiet provisioning must not consume a piped prompt intended for the later harness run.
+        // Each pump owns its socket, so session teardown cannot recycle an fd beneath it.
+        if forwardInput {
             let grant = grant
-            Thread { Self.pumpOperatorInput(to: stdinFd, grant: grant) }.start()
+            Thread {
+                defer { close(inputFd) }
+                Self.pumpOperatorInput(from: STDIN_FILENO, to: inputFd, grant: grant)
+            }.start()
+        } else {
+            shutdown(stdinFd, Int32(SHUT_WR))
         }
         var winch: DispatchSourceSignal?
         if interactive { winch = installResizeForwarder(controlFd: controlFd) }
@@ -63,13 +79,13 @@ public final class Session {
         defer {
             winch?.cancel()
             if clean {
-                // Exit raced the last stdout bytes: drain, bounded so a wedged agent cannot hang us.
-                FDIO.setReadTimeout(stdoutFd, seconds: 5)
+                // Exit raced the last output bytes: drain, bounded so a wedged guest agent cannot hang us.
+                fds.dropFirst().forEach { FDIO.setReadTimeout($0, seconds: 5) }
             } else {
-                shutdown(stdoutFd, Int32(SHUT_RDWR))
+                fds.dropFirst().forEach { shutdown($0, Int32(SHUT_RDWR)) }
                 shutdown(stdinFd, Int32(SHUT_RDWR))
             }
-            stdoutDone.wait()
+            for _ in fds.dropFirst() { outputDone.wait() }
         }
 
         guard case .exited(let code) = try FDIO.readFrame(controlFd, cap: Contract.maxControlFrame) else {
@@ -83,6 +99,7 @@ public final class Session {
     public func claimStdio(which: StdioStream, nonce: String, fd: Int32) -> Bool {
         stateLock.lock()
         let accepted = armedNonce == nonce && DispatchTime.now() < armedDeadline
+            && Int(which.rawValue) < claimedFds.count
             && claimedFds[Int(which.rawValue)] < 0
         if accepted { claimedFds[Int(which.rawValue)] = fd }
         stateLock.unlock()
@@ -90,18 +107,19 @@ public final class Session {
         return accepted
     }
 
-    private func arm(nonce: String) {
+    private func arm(nonce: String, streams: Int) {
         stateLock.lock(); defer { stateLock.unlock() }
         armedNonce = nonce
         armedDeadline = .now() + .seconds(5)
-        claimedFds = [-1, -1]
+        claimedFds = Array(repeating: -1, count: streams)
     }
 
-    private func awaitStdio() throws -> (stdin: Int32, stdout: Int32) {
+    private func awaitStdio() throws -> [Int32] {
         stateLock.lock()
         let deadline = armedDeadline
+        let streams = claimedFds.count
         stateLock.unlock()
-        for _ in 0..<2 {
+        for _ in 0..<streams {
             guard claims.wait(timeout: deadline) == .success else {
                 throw SidekernelError.timeout("guest never connected exec stdio")
             }
@@ -110,7 +128,7 @@ public final class Session {
         let fds = claimedFds
         claimedFds = [-1, -1]
         armedNonce = nil
-        return (fds[0], fds[1])
+        return fds
     }
 
     private func disarm() {
@@ -122,7 +140,12 @@ public final class Session {
         for fd in leftover where fd >= 0 { close(fd) }
     }
 
-    private static func pumpGuestOutput(from: Int32, to: Int32) {
+    /// A terminal honours escapes whether or not stdin is one, so a piped prompt still filters.
+    static func filtersGuestOutput(to fd: Int32, interactive: Bool) -> Bool {
+        interactive || isatty(fd) != 0
+    }
+
+    static func pumpGuestOutput(from: Int32, to: Int32) {
         var filter = GuestOutputFilter()
         var buffer = [UInt8](repeating: 0, count: 4096)
         func emit(_ bytes: [UInt8]) -> Bool {
@@ -139,10 +162,13 @@ public final class Session {
     }
 
     /// The only stdin reader; the paste keystroke is noted before the VM sees it.
-    private static func pumpOperatorInput(to fd: Int32, grant: ClipboardGrant?) {
+    static func pumpOperatorInput(from source: Int32, to fd: Int32, grant: ClipboardGrant?) {
+        // Half-close only input: output and the process exit still need to drain.
+        defer { shutdown(fd, Int32(SHUT_WR)) }
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
-            let n = buffer.withUnsafeMutableBytes { read(STDIN_FILENO, $0.baseAddress, 4096) }
+            let n = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, 4096) }
+            if n < 0 && errno == EINTR { continue }
             guard n > 0 else { break }
             grant?.noteInput(buffer[0..<n])
             guard FDIO.writeAll(fd, Array(buffer[0..<n])) else { break }

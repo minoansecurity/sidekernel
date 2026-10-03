@@ -49,10 +49,10 @@ fn boot_overlay() -> Result<(), String> {
     mount_project_shares();
     mount_staging();
 
-    if matches!(personal, Personal::Degraded) || (matches!(personal, Personal::Stacked) && !personal_view) {
-        if fs::write(contract::DEGRADED_MARKER, "personal layer unavailable this boot; save is disabled\n").is_err() {
-            eprintln!("sk-agent: could not write {}", contract::DEGRADED_MARKER);
-        }
+    if (matches!(personal, Personal::Degraded) || (matches!(personal, Personal::Stacked) && !personal_view))
+        && fs::write(contract::DEGRADED_MARKER, "personal layer unavailable this boot; save is disabled\n").is_err()
+    {
+        eprintln!("sk-agent: could not write {}", contract::DEGRADED_MARKER);
     }
     configure_identity();
     Ok(())
@@ -105,7 +105,7 @@ fn mount_staging() {
 fn mount_project_shares() {
     let flags = sys::MS_NOSUID | sys::MS_NODEV;
     if let Err(error) = mount(contract::TAG_PROJECT, contract::PROJECT_MOUNT, Some("virtiofs"), flags, None) {
-        eprintln!("sk-agent: project share failed to mount ({error}); agent config will not persist");
+        eprintln!("sk-agent: project share failed to mount ({error}); harness configs will not persist");
     }
     if let Err(error) = mount(contract::TAG_SEED, contract::SEED_MOUNT, Some("virtiofs"), flags | sys::MS_RDONLY, None) {
         eprintln!("sk-agent: seed share failed to mount ({error}); host customizations are unavailable");
