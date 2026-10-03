@@ -54,8 +54,9 @@ public final class Session {
 
         let outputDone = DispatchSemaphore(value: 0)
         for (fd, destination) in zip(fds.dropFirst(), [STDOUT_FILENO, STDERR_FILENO]) {
+            let filtered = Self.filtersGuestOutput(to: destination, interactive: interactive)
             Thread {
-                if interactive { Self.pumpGuestOutput(from: fd, to: destination) }
+                if filtered { Self.pumpGuestOutput(from: fd, to: destination) }
                 else { FDIO.pump(from: fd, to: destination) }
                 outputDone.signal()
             }.start()
@@ -139,7 +140,12 @@ public final class Session {
         for fd in leftover where fd >= 0 { close(fd) }
     }
 
-    private static func pumpGuestOutput(from: Int32, to: Int32) {
+    /// A terminal honours escapes whether or not stdin is one, so a piped prompt still filters.
+    static func filtersGuestOutput(to fd: Int32, interactive: Bool) -> Bool {
+        interactive || isatty(fd) != 0
+    }
+
+    static func pumpGuestOutput(from: Int32, to: Int32) {
         var filter = GuestOutputFilter()
         var buffer = [UInt8](repeating: 0, count: 4096)
         func emit(_ bytes: [UInt8]) -> Bool {

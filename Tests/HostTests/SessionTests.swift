@@ -68,6 +68,28 @@ struct SessionTests {
         #expect(FDIO.readFull(sockets[0], count: 1) == [42])
     }
 
+    @Test func guestOutputToATerminalIsFilteredEvenWithPipedInput() throws {
+        var leader: Int32 = -1, follower: Int32 = -1
+        #expect(openpty(&leader, &follower, nil, nil, nil) == 0)
+        defer { close(leader); close(follower) }
+        let pipe = Pipe()
+        #expect(Session.filtersGuestOutput(to: follower, interactive: false))
+        #expect(!Session.filtersGuestOutput(to: pipe.fileHandleForWriting.fileDescriptor, interactive: false))
+        #expect(Session.filtersGuestOutput(to: pipe.fileHandleForWriting.fileDescriptor, interactive: true))
+
+        var sockets: [Int32] = [-1, -1]
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+        defer { close(sockets[1]) }
+        let payload = Array("a\u{1B}]52;c;aGk=\u{07}b".utf8)
+        #expect(FDIO.writeAll(sockets[1], payload))
+        shutdown(sockets[1], Int32(SHUT_WR))
+        let output = pipe.fileHandleForWriting.fileDescriptor
+        Session.pumpGuestOutput(from: sockets[0], to: output)
+        close(sockets[0])
+        try pipe.fileHandleForWriting.close()
+        #expect(try pipe.fileHandleForReading.readToEnd() == Data("ab".utf8))
+    }
+
     @Test func execWireDistinguishesTerminalAndByteStreams() throws {
         for tty in [true, false] {
             let frame = Frame.exec(nonce: String(repeating: "0", count: 32), workdir: "/workspace",
