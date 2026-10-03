@@ -52,6 +52,13 @@ public final class Proxy {
 
     enum RequestError: Error { case refused, codexLoginRequired }
 
+    static let probeMethods: Set<String> = ["GET", "HEAD", "OPTIONS"]
+
+    /// Bodyless idempotent requests are base-URL probes, not channel misuse worth surfacing.
+    static func isNotableRefusal(_ request: HTTPRequest) -> Bool {
+        !request.body.isEmpty || !probeMethods.contains(request.method.uppercased())
+    }
+
     func buildUpstreamRequest(_ request: HTTPRequest) -> URLRequest? {
         try? prepareUpstreamRequest(request)
     }
@@ -62,7 +69,9 @@ public final class Proxy {
         }
         let pathOnly = String(request.path.prefix { $0 != "?" })
         guard Self.allowedPaths.contains(pathOnly) else {
-            Terminal.notice("proxy refused \(Self.printable(request.method)) \(Self.printable(request.path))")
+            if Self.isNotableRefusal(request) {
+                Terminal.notice("proxy refused \(Self.printable(request.method)) \(Self.printable(request.path))")
+            }
             throw RequestError.refused
         }
         guard let injection = credentials.resolveAnthropic(),
