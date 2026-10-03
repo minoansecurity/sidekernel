@@ -19,6 +19,7 @@ let package = Package(
                 .copy("Resources/bashrc"),
                 .copy("Resources/clip"),
                 .copy("Resources/codex"),
+                .copy("Resources/harness.py"),
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

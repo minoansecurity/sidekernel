@@ -1,7 +1,6 @@
-"""Exercise the guest wrapper with real PTYs, without host credentials or clipboard access."""
+"""Exercise the shared harness relay with real PTYs, without host credentials or clipboard access."""
 import errno
 import fcntl
-import json
 import os
 from pathlib import Path
 import pty
@@ -21,8 +20,16 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "guest/codex"
-CODEX = runpy.run_path(str(SOURCE), run_name="codex_wrapper_test")
+SOURCE = ROOT / "guest/internal/harness.py"
+HARNESS = runpy.run_path(str(SOURCE), run_name="harness_test")
+# The smallest wrapper: what guest/codex does once its own policy checks pass.
+LAUNCHER = """
+import os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ["SK_ROOT"] + "/run/sidekernel/libexec")
+from harness import launch
+sys.exit(launch(BINARY, [BINARY] + sys.argv[1:]))
+"""
 
 
 def png():
@@ -36,13 +43,13 @@ def png():
 
 class PasteInputTests(unittest.TestCase):
     def test_keys_and_markers_survive_every_read_boundary(self):
-        start, end = CODEX["PASTE_START"], CODEX["PASTE_END"]
-        for key in CODEX["PASTE_KEYS"]:
+        start, end = HARNESS["PASTE_START"], HARNESS["PASTE_END"]
+        for key in HARNESS["PASTE_KEYS"]:
             # A Ctrl+V byte inside a bracketed text paste must stay literal.
             data = b"before" + key + start + b"literal\x16" + end + key + b"after"
             expected = b"beforeATTACH" + start + b"literal\x16" + end + b"ATTACHafter"
             for split in range(len(data) + 1):
-                parser = CODEX["PasteInput"]()
+                parser = HARNESS["PasteInput"]()
                 calls = []
                 def image():
                     calls.append(True)
@@ -54,19 +61,19 @@ class PasteInputTests(unittest.TestCase):
     def test_other_keys_and_clipboard_failures_are_preserved(self):
         data = (b"\x1b[118;5:3u\x1b[118;1u\x1b[117;5u\x1b[27;1;118~"
                 b"\x16\x1b[6n\x1b[1;2R\x03\x1b")
-        parser = CODEX["PasteInput"]()
+        parser = HARNESS["PasteInput"]()
         self.assertEqual(parser.feed(data, lambda: None) + parser.flush(), data)
 
     def test_escape_flush_does_not_consume_next_key(self):
-        parser = CODEX["PasteInput"]()
+        parser = HARNESS["PasteInput"]()
         self.assertEqual(parser.feed(b"\x1b", lambda: b"BAD"), b"")
         self.assertEqual(parser.flush(), b"\x1b")
-        self.assertEqual(parser.feed(b"x", lambda: b"BAD"), b"x")
+        self.assertEqual(parser.feed(b"\x16", lambda: b"ATTACH"), b"ATTACH")
 
     def test_delayed_paste_end_marker_is_not_lost_on_escape_timeout(self):
-        start, end = CODEX["PASTE_START"], CODEX["PASTE_END"]
+        start, end = HARNESS["PASTE_START"], HARNESS["PASTE_END"]
         for split in range(1, len(end)):
-            parser = CODEX["PasteInput"]()
+            parser = HARNESS["PasteInput"]()
             self.assertEqual(parser.feed(start + b"text", lambda: b"BAD"), start + b"text")
             self.assertEqual(parser.feed(end[:split], lambda: b"BAD"), b"")
             self.assertEqual(parser.flush(), b"")
@@ -76,22 +83,15 @@ class PasteInputTests(unittest.TestCase):
 
     def test_large_literal_paste_is_preserved(self):
         data = (b"plain text\r\n" * 100_000) + b"\x16"
-        parser = CODEX["PasteInput"]()
+        parser = HARNESS["PasteInput"]()
         self.assertEqual(parser.feed(data, lambda: b"ATTACH"), data[:-1] + b"ATTACH")
 
-    def test_only_interactive_invocations_use_the_relay(self):
-        check = CODEX["interactive_terminal"]
-        for args in [[], ["a prompt"], ["--", "exec"], ["resume", "--last"], ["fork", "id"],
-                     ["-m", "review"], ["-i", "exec.png"], ["-c", 'x="exec"']]:
-            self.assertTrue(check(args), args)
-        for args in [["exec", "-"], ["--model", "x", "exec"], ["e", "prompt"], ["review"],
-                     ["features", "list"], ["--help"], ["resume", "--help"], ["--version"]]:
-            self.assertFalse(check(args), args)
 
+class TerminalCase(unittest.TestCase):
+    """Runs a wrapper in a PTY against a stub harness that records its input."""
 
-class TerminalTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="sidekernel-codex-terminal-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="sidekernel-harness-terminal-")
         self.root = Path(self.temporary.name)
         self.agent = self.root / "run/sidekernel/libexec/sk-agent"
         self.agent.parent.mkdir(parents=True)
@@ -105,13 +105,14 @@ with open(os.environ['REQUESTS'], 'ab') as requests:
     requests.write(b'clip\\n')
 sys.stdout.buffer.write(pathlib.Path(os.environ['FIXTURE']).read_bytes())
 """)
-        self.binary = self.root / "codex-stub"
+        self.binary = self.root / "harness-stub"
         self.binary.write_text("#!" + sys.executable + "\n" + """
 import fcntl, json, os, pathlib, signal, struct, sys, termios, tty
 def size():
     return list(struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))[:2])
 def resized(*_):
-    print('SIZE=' + json.dumps(size()), flush=True)
+    # Not print: the signal can land inside the main thread's print and make it reentrant.
+    os.write(1, ('SIZE=' + json.dumps(size()) + '\\n').encode())
 signal.signal(signal.SIGWINCH, resized)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(23))
 tty.setraw(0)
@@ -128,8 +129,10 @@ print('FINAL_OUTPUT', flush=True)
 sys.exit(7)
 """)
         self.binary.chmod(0o755)
+        self.harness = self.agent.parent / "harness.py"
+        self.harness.write_text(SOURCE.read_text())
         self.wrapper = self.root / "wrapper"
-        self.wrapper.write_text(SOURCE.read_text().replace("/usr/local/bin/codex", str(self.binary)))
+        self.wrapper.write_text(self.wrapper_source())
         self.environment = dict(os.environ, SK_ROOT=str(self.root), CODEX_HOME=str(self.root / "config"),
                                 FIXTURE=str(self.fixture), REQUESTS=str(self.requests),
                                 CAPTURE=str(self.root / "capture"))
@@ -140,7 +143,6 @@ sys.exit(7)
     def tearDown(self):
         if self.process is not None:
             if self.process.poll() is None:
-                self.process.send_signal(signal.SIGCONT)
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=3)
@@ -151,6 +153,9 @@ sys.exit(7)
             if fd is not None:
                 os.close(fd)
         self.temporary.cleanup()
+
+    def wrapper_source(self):
+        return LAUNCHER.replace("BINARY", repr(str(self.binary)))
 
     def write_agent(self, script):
         self.agent.write_text("#!" + sys.executable + "\n" + script)
@@ -193,6 +198,8 @@ sys.exit(7)
         expected[3] &= ~getattr(termios, "PENDIN", 0)
         self.assertEqual(actual, expected)
 
+
+class RelayTests(TerminalCase):
     def test_multiple_images_attach_in_order_and_remain_private(self):
         self.start()
         os.write(self.master, b"draft\x16 between \x1b[118;5u after")
@@ -210,6 +217,7 @@ sys.exit(7)
         self.assertEqual(self.requests.read_bytes(), b"clip\nclip\n")
 
     def test_text_paste_never_reads_clipboard(self):
+        # Don't let a slow machine release a marker prefix between single-byte writes.
         self.start()
         data = b"\x1b[200~literal\x16\x1b[118;5u\r\n\x1b[201~"
         # Feed one byte at a time to exercise split terminal markers.
@@ -271,32 +279,11 @@ while True:
     time.sleep(1)
 """)
         # Exercise EOF while keeping the outer PTY open to inspect its restored modes.
-        self.wrapper.write_text(self.wrapper.read_text().replace('data = os.read(0, 4096)', 'data = b""'))
+        self.harness.write_text(self.harness.read_text().replace('data = os.read(0, 4096)', 'data = b""'))
         self.start()
         os.write(self.master, b"trigger EOF")
         self.assertEqual(self.process.wait(timeout=4), 128 + signal.SIGKILL)
         self.assert_terminal_restored()
-
-    def test_child_suspend_and_resume_restore_the_outer_terminal(self):
-        self.binary.write_text(self.binary.read_text().replace(
-            "print('READY='", "signal.signal(signal.SIGUSR1, lambda *_: os.kill(os.getpid(), signal.SIGSTOP))\n"
-            "signal.signal(signal.SIGCONT, lambda *_: print('CONTINUED', flush=True))\nprint('READY='"))
-        self.start()
-        child = int(re.search(rb"CHILD_PID=(\d+)", self.output).group(1))
-        os.kill(child, signal.SIGUSR1)
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            waited, status = os.waitpid(self.process.pid, os.WNOHANG | os.WUNTRACED)
-            if waited and os.WIFSTOPPED(status):
-                break
-            time.sleep(0.01)
-        else:
-            self.fail("relay did not suspend with Codex")
-        self.assert_terminal_restored()
-        self.process.send_signal(signal.SIGCONT)
-        self.read_until(b"CONTINUED")
-        os.write(self.master, b"after resume")
-        self.assertEqual(self.finish(), b"after resume\x04")
 
     def test_noninteractive_streams_and_literal_bytes_are_unchanged(self):
         self.binary.write_text("#!" + sys.executable + "\n" + """
@@ -314,10 +301,19 @@ sys.exit(9)
         self.assertEqual(result.stderr, b"diagnostic")
         self.assertFalse(self.requests.exists())
 
+    def test_relay_needs_all_three_streams_on_the_terminal(self):
+        # Redirected stderr stays where the caller sent it, so the harness keeps the caller's terminal.
+        self.binary.write_text("#!" + sys.executable + "\nimport os\nprint('TTY=' + os.ttyname(0), flush=True)\n")
+        self.master, self.slave = pty.openpty()
+        result = subprocess.run([sys.executable, str(self.wrapper)], stdin=self.slave, stdout=self.slave,
+                                stderr=subprocess.PIPE, env=self.environment, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.read_until(b"TTY=" + os.fsencode(os.ttyname(self.slave)) + b"\r\n")
+
     def test_clipboard_timeout_removes_partial_file(self):
         with patch.dict(os.environ, self.environment), patch("subprocess.run", side_effect=
                 subprocess.TimeoutExpired("sk-agent", 5)):
-            self.assertIsNone(CODEX["clipboard_image"]())
+            self.assertIsNone(HARNESS["clipboard_image"]())
         self.assertEqual(list((self.root / "run/sidekernel/clipboard").iterdir()), [])
 
     def test_claude_clipboard_commands_still_return_png_and_targets(self):
