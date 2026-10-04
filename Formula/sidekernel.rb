@@ -3,7 +3,7 @@ class Sidekernel < Formula
   desc "Easy-to-use microVM sandbox for AI coding agents"
   homepage "https://sidekernel.com"
   url "https://github.com/minoansecurity/sidekernel/archive/refs/tags/v0.1.5.tar.gz"
-  sha256 "TODO_SET_AFTER_TAGGING" # from the release.yml job summary for v0.1.5
+  sha256 "827a92ffc8b708f88d1aaf28cdce90cd073963004a75b169b39f847f49c886d3"
   license "Apache-2.0"
   head "https://github.com/minoansecurity/sidekernel.git", branch: "main"
 

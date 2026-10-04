@@ -27,7 +27,7 @@ Beyond AI agents, SideKernel is useful for trying out software without installin
 
 Tested on M1 and M4 (macOS 26.2); other Apple silicon chips should work. If you tested it and ran into any issues, please [open an issue](https://github.com/minoansecurity/sidekernel/issues).
 
-Install with `brew` (recommended - TEMPORARY UNAVAILABLE, working on a fix)
+Install with `brew` (recommended)
 
 ```sh
 brew tap minoansecurity/sidekernel https://github.com/minoansecurity/sidekernel && brew trust --formula minoansecurity/sidekernel/sidekernel
