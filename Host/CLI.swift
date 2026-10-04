@@ -3,7 +3,7 @@ import Darwin
 
 @main
 public enum CLI {
-    static let version = "0.1.4"
+    static let version = "0.1.5"
 
     public static func main() {
         if let harness = Harness.invoked(argv0: CommandLine.arguments.first ?? "") {

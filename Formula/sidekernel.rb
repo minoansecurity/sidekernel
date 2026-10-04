@@ -2,8 +2,8 @@
 class Sidekernel < Formula
   desc "Easy-to-use microVM sandbox for AI coding agents"
   homepage "https://sidekernel.com"
-  url "https://github.com/minoansecurity/sidekernel/archive/refs/tags/v0.1.4.tar.gz"
-  sha256 "9816dcd178017fb5e3a0378e85b723eadb3300ce7c3b2f5a95d3b70bd1462440"
+  url "https://github.com/minoansecurity/sidekernel/archive/refs/tags/v0.1.5.tar.gz"
+  sha256 "TODO_SET_AFTER_TAGGING" # from the release.yml job summary for v0.1.5
   license "Apache-2.0"
   head "https://github.com/minoansecurity/sidekernel.git", branch: "main"
 
@@ -26,7 +26,9 @@ class Sidekernel < Formula
     resources_dir = buildpath/"Host/Resources"
     resources_dir.mkpath
     cp "agent/target/aarch64-unknown-linux-musl/release/sk-agent", resources_dir
-    %w[save sk-drop sk-net ramblinwreck codex internal/seed internal/bashrc internal/clip].each do |script|
+    # Keep this list in sync with GUEST_SCRIPTS in the Makefile.
+    %w[save sk-drop sk-net ramblinwreck codex
+       internal/seed internal/bashrc internal/clip internal/harness.py].each do |script|
       cp "guest/#{script}", resources_dir/File.basename(script)
     end
 
