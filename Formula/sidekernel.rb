@@ -2,8 +2,8 @@
 class Sidekernel < Formula
   desc "Easy-to-use microVM sandbox for AI coding agents"
   homepage "https://sidekernel.com"
-  url "https://github.com/minoansecurity/sidekernel/archive/refs/tags/v0.1.3.tar.gz"
-  sha256 "8b93858a5a77924c57d639fa8776ca365a7e9914d14094d6d9d93b72a07188d8"
+  url "https://github.com/minoansecurity/sidekernel/archive/refs/tags/v0.1.4.tar.gz"
+  sha256 "9816dcd178017fb5e3a0378e85b723eadb3300ce7c3b2f5a95d3b70bd1462440"
   license "Apache-2.0"
   head "https://github.com/minoansecurity/sidekernel.git", branch: "main"
 
