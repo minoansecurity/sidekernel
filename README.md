@@ -9,6 +9,12 @@
   <a href="https://sidekernel.com/essay/"><b>Note from the developer</b></a>
 </p>
 
+<p align="center">
+  ⭐ If this looks useful, a star helps others find it.<br>
+  📣 Know someone who might like it? Feel free to pass it along.<br>
+  🤝 Questions, ideas, and PRs of any size are always welcome.
+</p>
+
 
 SideKernel is a usable sandbox for AI coding agents (e.g. Claude Code). "Usable" means it tries to stay out of your way and to feel as if it's not there. It has zero third-party dependencies: the host uses only Apple's frameworks and the guest agent only Rust's standard library. It is developed as a capstone project for Georgia Tech's MSc in Cybersecurity.
 
