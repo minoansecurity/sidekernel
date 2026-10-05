@@ -75,7 +75,7 @@ You can also **drag and drop** files directly into Claude Code.
 
 ## Limitations and Notes on Security
 
-SideKernel is a research prototype and has limitations. The code has not had a formal security review or external audit. See [threat model](https://sidekernel.com/#threat-model) and [limitations](https://sidekernel.com/#limitations) on sidekernel.com for the details, including the risks that are accepted by design. Implementation bugs are possible and samdbox escapes cannot be ruled out. Use responsibly.
+SideKernel is a research prototype and has limitations. The code has not had a formal security review or external audit. See [threat model](https://sidekernel.com/#threat-model) and [limitations](https://sidekernel.com/#limitations) on sidekernel.com for the details, including the risks that are accepted by design. Implementation bugs are possible and sandbox escapes cannot be ruled out. Use responsibly.
 
 Found a vulnerability? Please [report it privately on GitHub](https://github.com/minoansecurity/sidekernel/security/advisories/new). Reports are welcome and taken seriously, but fixes may take a little while. The project is still small and it's just me at the moment. Contributions are welcome.
 
